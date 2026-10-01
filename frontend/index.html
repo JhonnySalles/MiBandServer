@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MiBand 6 Hub | Raspberry Pi</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/src/style.css" />
+    <!-- Chart.js via CDN para visualização imediata e sem build prévio -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  </head>
+  <body>
+    <div id="app">
+      <!-- Sidebar Navigation -->
+      <aside class="sidebar">
+        <div class="logo">
+          <div class="logo-icon">⚡</div>
+          <div class="logo-text">
+            <h2>MiBand<span>Hub</span></h2>
+            <span class="badge">RPi 4</span>
+          </div>
+        </div>
+
+        <nav class="nav-menu">
+          <button class="nav-item active" data-tab="dashboard">
+            <span class="icon">📊</span>
+            <span>Dashboard</span>
+          </button>
+          <button class="nav-item" data-tab="history">
+            <span class="icon">📜</span>
+            <span>Histórico</span>
+          </button>
+          <button class="nav-item" data-tab="devices">
+            <span class="icon">⌚</span>
+            <span>Dispositivos</span>
+          </button>
+          <button class="nav-item" data-tab="integrations">
+            <span class="icon">⛅</span>
+            <span>Integrações & Clima</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-footer">
+          <div class="device-status-card">
+            <div class="status-indicator online" id="redis-indicator"></div>
+            <div class="status-info">
+              <span class="device-name" id="sidebar-device-name">Mi Smart Band 6</span>
+              <span class="device-mac" id="sidebar-device-mac">Carregando...</span>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Main Content Area -->
+      <main class="main-content">
+        <!-- Header -->
+        <header class="top-header">
+          <div class="header-title">
+            <h1 id="page-title">Painel de Métricas</h1>
+            <p id="page-subtitle">Sincronização em tempo real do Raspberry Pi com sua Mi Band</p>
+          </div>
+          <div class="header-actions">
+            <button id="btn-find-band" class="btn btn-secondary">
+              <span class="btn-icon">🔔</span> Localizar Pulseira
+            </button>
+            <button id="btn-sync-now" class="btn btn-primary">
+              <span class="btn-icon">🔄</span> Sincronizar Agora
+            </button>
+          </div>
+        </header>
+
+        <!-- Notification Banner -->
+        <div id="notification" class="notification hidden"></div>
+
+        <!-- TAB: DASHBOARD -->
+        <section id="tab-dashboard" class="tab-content active">
+          <!-- Métricas Resumidas -->
+          <div class="metrics-grid">
+            <div class="metric-card">
+              <div class="metric-icon steps-icon">👟</div>
+              <div class="metric-data">
+                <span class="metric-label">Passos Hoje</span>
+                <span class="metric-value" id="val-steps">--</span>
+                <span class="metric-sub" id="val-distance">-- km percorridos</span>
+              </div>
+            </div>
+
+            <div class="metric-card">
+              <div class="metric-icon heart-icon">❤️</div>
+              <div class="metric-data">
+                <span class="metric-label">Frequência Cardíaca</span>
+                <span class="metric-value" id="val-heart">-- <small>BPM</small></span>
+                <span class="metric-sub">Última leitura registrada</span>
+              </div>
+            </div>
+
+            <div class="metric-card">
+              <div class="metric-icon calories-icon">🔥</div>
+              <div class="metric-data">
+                <span class="metric-label">Calorias Queimadas</span>
+                <span class="metric-value" id="val-calories">-- <small>kcal</small></span>
+                <span class="metric-sub">Gasto energético estimado</span>
+              </div>
+            </div>
+
+            <div class="metric-card">
+              <div class="metric-icon battery-icon">🔋</div>
+              <div class="metric-data">
+                <span class="metric-label">Bateria da Pulseira</span>
+                <span class="metric-value" id="val-battery">--%</span>
+                <div class="battery-bar-container">
+                  <div class="battery-bar" id="battery-level-bar" style="width: 0%"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Gráficos de Evolução -->
+          <div class="grid-two-cols mb-4">
+            <div class="card chart-card">
+              <h3>📈 Evolução de Passos & Distância</h3>
+              <p>Histórico recente das medições capturadas</p>
+              <div class="chart-container">
+                <canvas id="stepsChart"></canvas>
+              </div>
+            </div>
+
+            <div class="card chart-card">
+              <h3>❤️ Monitoramento de Batimentos Cardíacos</h3>
+              <p>Frequência cardíaca ao longo do dia (BPM)</p>
+              <div class="chart-container">
+                <canvas id="heartChart"></canvas>
+              </div>
+            </div>
+          </div>
+
+          <!-- Quick Actions and Weather Dispatch -->
+          <div class="grid-two-cols">
+            <div class="card card-action">
+              <h3>🌤️ Enviar Previsão do Tempo</h3>
+              <p>Envie o clima atualizado da internet ou personalize manualmente para a Mi Band 6.</p>
+              <form id="form-weather" class="form-row mb-3">
+                <input type="number" id="weather-temp" placeholder="Temperatura °C" value="24" required />
+                <input type="text" id="weather-condition" placeholder="Condição" value="Ensolarado" required />
+                <button type="submit" class="btn btn-secondary">Enviar Manual</button>
+              </form>
+              <button id="btn-auto-weather" class="btn btn-secondary w-100">
+                <span>🌐</span> Obter Clima da Internet e Enviar
+              </button>
+            </div>
+
+            <div class="card card-action">
+              <h3>⏱️ Próximas Sincronizações</h3>
+              <p>Horários configurados no Raspberry Pi para sincronização automática:</p>
+              <div id="sync-schedule-badges" class="badges-row">
+                <span class="badge badge-pill">08:00</span>
+                <span class="badge badge-pill">12:00</span>
+                <span class="badge badge-pill">18:00</span>
+                <span class="badge badge-pill">22:00</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- TAB: HISTÓRICO -->
+        <section id="tab-history" class="tab-content">
+          <div class="card">
+            <h3>📜 Histórico de Sincronizações</h3>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Data / Hora</th>
+                    <th>Dispositivo</th>
+                    <th>Status</th>
+                    <th>Mensagem</th>
+                    <th>Detalhes</th>
+                  </tr>
+                </thead>
+                <tbody id="history-table-body">
+                  <tr><td colspan="5" class="text-center">Carregando registros...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- TAB: GERENCIADOR DE DISPOSITIVOS -->
+        <section id="tab-devices" class="tab-content">
+          <div class="card mb-4">
+            <div class="d-flex justify-between align-center mb-3">
+              <div>
+                <h3>⌚ Pulseiras Mi Band Cadastradas</h3>
+                <p>Gerencie seus dispositivos vinculados e realize ações diretas.</p>
+              </div>
+              <button id="btn-open-add-device" class="btn btn-primary">
+                <span>➕</span> Cadastrar / Parear Novo
+              </button>
+            </div>
+
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Nome</th>
+                    <th>Endereço MAC</th>
+                    <th>Intervalo / Horários</th>
+                    <th>Última Sincronização</th>
+                    <th>Clima Auto</th>
+                    <th>Ações</th>
+                  </tr>
+                </thead>
+                <tbody id="devices-table-body">
+                  <tr><td colspan="6" class="text-center">Carregando dispositivos...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="grid-two-cols">
+            <!-- Bluetooth Scanner -->
+            <div class="card">
+              <h3>🔍 Scanner Bluetooth (BLE)</h3>
+              <p>Descubra pulseiras Mi Band 6 e outros dispositivos próximos.</p>
+              <button id="btn-scan-ble" class="btn btn-secondary mb-3">
+                <span class="btn-icon">📡</span> Buscar Dispositivos Próximos
+              </button>
+              <ul id="ble-devices-list" class="device-list">
+                <li class="empty-state">Clique em buscar para escanear antenas Bluetooth.</li>
+              </ul>
+            </div>
+
+            <!-- Device Form (Add / Edit) -->
+            <div class="card">
+              <h3 id="form-device-title">➕ Configurar Dispositivo</h3>
+              <form id="form-config">
+                <div class="form-group">
+                  <label for="cfg-name">Nome da Pulseira</label>
+                  <input type="text" id="cfg-name" value="Mi Smart Band 6" required />
+                </div>
+
+                <div class="form-group">
+                  <label for="cfg-mac">Endereço MAC Bluetooth</label>
+                  <input type="text" id="cfg-mac" placeholder="Ex: E4:5F:01:23:45:67" required />
+                </div>
+
+                <div class="form-group">
+                  <label for="cfg-auth">Auth Key (Chave Hexadecimal de Pareamento)</label>
+                  <input type="password" id="cfg-auth" placeholder="32 caracteres hexadecimais (opcional)" />
+                </div>
+
+                <div class="form-row mb-3">
+                  <div>
+                    <label for="cfg-interval-hours">Intervalo de Sincronização (Horas)</label>
+                    <input type="number" id="cfg-interval-hours" value="1" min="1" max="24" required />
+                    <small class="form-hint">Sincroniza automaticamente a cada X horas.</small>
+                  </div>
+                  <div>
+                    <label for="cfg-auto-weather-check" style="display:block; margin-bottom: 8px;">Clima Automático</label>
+                    <label style="display:flex; align-items: center; margin-top: 10px;">
+                      <input type="checkbox" id="cfg-auto-weather" checked style="width: auto; margin-right: 8px;" />
+                      Enviar previsão do tempo
+                    </label>
+                  </div>
+                </div>
+
+                <!-- Grid de Horários Específicos -->
+                <div class="form-group mb-4">
+                  <label>⏰ Horários Fixos Específicos (Grid)</label>
+                  <p class="text-sm text-muted mb-2">Defina horários exatos para disparar a sincronização (ex: 07:00, 12:30):</p>
+                  
+                  <div class="d-flex gap-2 mb-2">
+                    <input type="time" id="new-schedule-time" value="07:00" style="max-width: 160px;" />
+                    <button type="button" id="btn-add-schedule-time" class="btn btn-secondary">
+                      <span>➕</span> Adicionar Horário
+                    </button>
+                  </div>
+
+                  <div id="schedule-times-container" class="badges-row mt-2">
+                    <!-- Badges com botão 'x' para deletar horário -->
+                    <span class="text-muted text-sm">Nenhum horário fixo adicionado.</span>
+                  </div>
+                  <input type="hidden" id="cfg-intervals" value="08:00, 12:00, 18:00, 22:00" />
+                </div>
+
+                <div class="d-flex gap-2">
+                  <button type="submit" class="btn btn-primary flex-1">Salvar Pulseira</button>
+                  <button type="button" id="btn-cancel-edit" class="btn btn-secondary hidden">Cancelar</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </section>
+
+        <!-- TAB: INTEGRAÇÕES & CLIMA -->
+        <section id="tab-integrations" class="tab-content">
+          <div class="grid-two-cols">
+            <!-- Weather API Settings -->
+            <div class="card">
+              <h3>⛅ Configuração da API de Clima</h3>
+              <p>Configure tokens e fontes de dados de meteorologia para envio automático.</p>
+              
+              <form id="form-integrations">
+                <div class="form-group">
+                  <label for="int-provider">Provedor Meteorológico</label>
+                  <select id="int-provider" class="form-select">
+                    <option value="open-meteo">Open-Meteo (Gratuito / Sem Token)</option>
+                    <option value="openweathermap">OpenWeatherMap (Requer API Key)</option>
+                    <option value="weatherapi">WeatherAPI (Requer API Key)</option>
+                  </select>
+                </div>
+
+                <div class="form-group">
+                  <label for="int-token">API Token / Chave Secreta</label>
+                  <input type="password" id="int-token" placeholder="Cole sua chave de API aqui" />
+                  <small class="form-hint">Obrigatório para OpenWeatherMap e WeatherAPI.</small>
+                </div>
+
+                <div class="form-group">
+                  <label for="int-city">Cidade / Localidade de Referência</label>
+                  <input type="text" id="int-city" value="São Paulo" required />
+                </div>
+
+                <div class="form-row mb-3">
+                  <div>
+                    <label for="int-lat">Latitude</label>
+                    <input type="number" step="any" id="int-lat" value="-23.5505" />
+                  </div>
+                  <div>
+                    <label for="int-lon">Longitude</label>
+                    <input type="number" step="any" id="int-lon" value="-46.6333" />
+                  </div>
+                </div>
+
+                <div class="form-group">
+                  <label for="int-ttl">Tempo de Cache em Memória RAM (Minutos)</label>
+                  <input type="number" id="int-ttl" value="30" min="5" max="1440" />
+                  <small class="form-hint">Evita leituras no SD Card e protege o limite gratuito da API.</small>
+                </div>
+
+                <button type="submit" class="btn btn-primary w-100">Salvar Integrações</button>
+              </form>
+            </div>
+
+            <!-- In-Memory / SD Card Protection Status -->
+            <div class="card">
+              <h3>⚡ Banco em Memória & Proteção do SD Card</h3>
+              <p>Informações de cache e desempenho do servidor Raspberry Pi.</p>
+              
+              <div class="status-summary-box mb-4">
+                <div class="d-flex align-center gap-2 mb-2">
+                  <div class="status-indicator online"></div>
+                  <strong>Status do Redis: <span id="redis-status-text">Conectado (RAM)</span></strong>
+                </div>
+                <p class="text-muted text-sm">
+                  As respostas de clima, logs transitórios e métricas instantâneas ficam retidas em memória RAM, minimizando gravações no cartão SD do Raspberry Pi 4.
+                </p>
+              </div>
+
+              <div class="preview-weather-box card">
+                <h4>🌤️ Prévia da Consulta Atual</h4>
+                <div id="weather-preview-content" class="mt-2">
+                  <p>Carregando clima atual...</p>
+                </div>
+                <button id="btn-refresh-weather-preview" class="btn btn-secondary mt-3 w-100">
+                  🔄 Testar Conexão / Atualizar Prévia
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
+
