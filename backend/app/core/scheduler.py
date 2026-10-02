@@ -1,11 +1,11 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlmodel import Session, select
 
 from app.core.logger import logger
-from app.core.database import engine, DeviceConfig, IntegrationConfig, SyncSchedule, ActivityLog, SyncHistory
+from app.core.database import engine, DeviceConfig, IntegrationConfig, SyncSchedule, ActivityLog, SyncHistory, get_utc_now
 from app.core.cache import cache
 from app.services.miband import miband_service
 from app.services.weather import weather_service
@@ -58,7 +58,7 @@ async def execute_sync_workflow(mac_address: str, auth_key: Optional[str] = None
     # 2. Sincronizar Métricas BLE da Pulseira
     res = await miband_service.sync_band(mac_address, auth_key)
     status_code = res.get("status", "ERROR")
-    now = datetime.utcnow()
+    now = get_utc_now()
 
     with Session(engine) as session:
         # Registrar no histórico
@@ -107,7 +107,7 @@ async def check_hourly_sync():
     Se o tempo decorrido >= sync_interval_hours, dispara o workflow.
     """
     logger.info("Executando rotina horária de verificação de sincronização...")
-    now = datetime.utcnow()
+    now = get_utc_now()
 
     with Session(engine) as session:
         devices = session.exec(select(DeviceConfig).where(DeviceConfig.is_active == True)).all()
@@ -129,6 +129,8 @@ async def check_hourly_sync():
                 should_sync = True
                 logger.info(f"Dispositivo {dev.mac_address} nunca sincronizou. Disparando sincronização por intervalo.")
             else:
+                if last_sync.tzinfo is None:
+                    last_sync = last_sync.replace(tzinfo=timezone.utc)
                 elapsed_hours = (now - last_sync).total_seconds() / 3600.0
                 if elapsed_hours >= (interval - 0.05):  # Margem de tolerância
                     should_sync = True

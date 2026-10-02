@@ -1,8 +1,11 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from sqlmodel import Field, SQLModel, create_engine, Session
 from app.core.config import settings
 import os
+
+def get_utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 class DeviceConfig(SQLModel, table=True):
     __tablename__ = "device_config"
@@ -15,8 +18,8 @@ class DeviceConfig(SQLModel, table=True):
     sync_intervals: Optional[str] = Field(default="08:00,12:00,18:00,22:00")  # Horários específicos separados por vírgula (ex: 07:15, 12:00)
     auto_weather: bool = Field(default=True)
     last_sync_time: Optional[datetime] = None  # Timestamp da última sincronização bem sucedida
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=get_utc_now)
+    updated_at: datetime = Field(default_factory=get_utc_now)
 
 class SyncSchedule(SQLModel, table=True):
     __tablename__ = "sync_schedule"
@@ -24,7 +27,7 @@ class SyncSchedule(SQLModel, table=True):
     device_mac: str = Field(index=True)
     scheduled_time: str = Field(index=True)  # Formato "HH:MM", ex: "07:30"
     is_active: bool = Field(default=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=get_utc_now)
 
 class IntegrationConfig(SQLModel, table=True):
     __tablename__ = "integration_config"
@@ -35,13 +38,13 @@ class IntegrationConfig(SQLModel, table=True):
     latitude: Optional[float] = -23.5505
     longitude: Optional[float] = -46.6333
     cache_ttl_minutes: int = Field(default=30)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=get_utc_now)
 
 class ActivityLog(SQLModel, table=True):
     __tablename__ = "activity_log"
     id: Optional[int] = Field(default=None, primary_key=True)
     device_mac: str = Field(index=True)
-    timestamp: datetime = Field(default_factory=datetime.utcnow, index=True)
+    timestamp: datetime = Field(default_factory=get_utc_now, index=True)
     steps: int = Field(default=0)
     distance_meters: int = Field(default=0)
     calories: int = Field(default=0)
@@ -52,7 +55,7 @@ class SyncHistory(SQLModel, table=True):
     __tablename__ = "sync_history"
     id: Optional[int] = Field(default=None, primary_key=True)
     device_mac: Optional[str] = Field(default=None, index=True)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=get_utc_now)
     status: str  # "SUCCESS", "ERROR", "IN_PROGRESS"
     message: Optional[str] = None
     details: Optional[str] = None

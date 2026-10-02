@@ -2,10 +2,11 @@ import os
 from pydantic import BaseModel
 
 class Settings(BaseModel):
-    DB_URL: str = os.getenv("DB_URL", "sqlite:///./data/miband.db")
-    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    PORT: int = int(os.getenv("PORT", os.getenv("BACKEND_PORT", "8190")))
     HOST: str = os.getenv("HOST", "0.0.0.0")
-    PORT: int = int(os.getenv("PORT", "8000"))
+    DB_URL: str = os.getenv("DB_URL", "sqlite:///./data/miband.db")
+    REDIS_PORT: int = int(os.getenv("REDIS_PORT", "6389"))
+    REDIS_URL: str = os.getenv("REDIS_URL", f"redis://localhost:{os.getenv('REDIS_PORT', '6389')}/0")
     WEATHER_PROVIDER: str = os.getenv("WEATHER_PROVIDER", "open-meteo")
     WEATHER_API_KEY: str = os.getenv("WEATHER_API_KEY", "")
     WEATHER_CITY: str = os.getenv("WEATHER_CITY", "São Paulo")

@@ -1,5 +1,8 @@
-// Obter a URL base da API a partir de envs injetadas ou padrão
-const API_URL = (import.meta as any).env?.VITE_API_URL || 'http://localhost:8000';
+// Obter a URL base da API a partir de envs injetadas ou inferir pela origem / padrão 8190
+const API_URL = (import.meta as any).env?.VITE_API_URL || 
+  (typeof window !== 'undefined' && window.location.hostname 
+    ? `${window.location.protocol}//${window.location.hostname}:8190` 
+    : 'http://localhost:8190');
 
 declare const Chart: any;
 

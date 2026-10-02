@@ -16,12 +16,16 @@ fi
 
 # 2. Carregar variáveis de ambiente
 if [ ! -f .env ]; then
-    echo " -> Arquivo .env não encontrado. Criando padrão..."
-    cat <<EOF > .env
-FRONTEND_PORT=8080
-VITE_API_URL=http://localhost:8000
-EOF
+    echo " -> Arquivo .env não encontrado. Copiando de .env.example..."
+    cp .env.example .env
 fi
+
+# Extrair porta do frontend do .env para exibição amigável
+FRONTEND_PORT=$(grep -E '^FRONTEND_PORT=' .env | cut -d '=' -f2)
+FRONTEND_PORT=${FRONTEND_PORT:-8090}
+
+BACKEND_PORT=$(grep -E '^BACKEND_PORT=' .env | cut -d '=' -f2)
+BACKEND_PORT=${BACKEND_PORT:-8190}
 
 # 3. Construir e iniciar os contêineres Docker
 echo "[2/3] Construindo contêineres Docker..."
@@ -33,5 +37,6 @@ docker compose up -d
 echo ""
 echo "========================================="
 echo " Servidor MiBand 6 inicializado com sucesso!"
-echo " Acesse o painel web em: http://<IP_DO_RASPBERRY>:8080"
+echo " Painel Web: http://<IP_DO_RASPBERRY>:${FRONTEND_PORT}"
+echo " API Backend: http://<IP_DO_RASPBERRY>:${BACKEND_PORT}"
 echo "========================================="

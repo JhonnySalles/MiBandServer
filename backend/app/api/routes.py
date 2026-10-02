@@ -2,9 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 from typing import List, Optional
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, timezone
 
-from app.core.database import get_session, DeviceConfig, IntegrationConfig, ActivityLog, SyncHistory, SyncSchedule
+from app.core.database import get_session, DeviceConfig, IntegrationConfig, ActivityLog, SyncHistory, SyncSchedule, get_utc_now
 from app.core.cache import cache
 from app.core.scheduler import execute_sync_workflow, reload_scheduler_jobs
 from app.services.miband import miband_service
@@ -95,7 +95,7 @@ def save_device_config(data: DeviceCreate, session: Session = Depends(get_sessio
             existing.auto_weather = data.auto_weather
         if data.is_active is not None:
             existing.is_active = data.is_active
-        existing.updated_at = datetime.utcnow()
+        existing.updated_at = get_utc_now()
         session.add(existing)
         session.commit()
         session.refresh(existing)
@@ -195,7 +195,7 @@ def save_integration_config(data: IntegrationUpdate, session: Session = Depends(
             config.longitude = data.longitude
         if data.cache_ttl_minutes is not None:
             config.cache_ttl_minutes = data.cache_ttl_minutes
-        config.updated_at = datetime.utcnow()
+        config.updated_at = get_utc_now()
         session.add(config)
     
     session.commit()
