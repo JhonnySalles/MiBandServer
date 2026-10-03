@@ -222,13 +222,24 @@
           <div class="grid-two-cols">
             <!-- Bluetooth Scanner -->
             <div class="card">
-              <h3>🔍 Scanner Bluetooth (BLE)</h3>
-              <p>Descubra pulseiras Mi Band 6 e outros dispositivos próximos.</p>
-              <button id="btn-scan-ble" class="btn btn-secondary mb-3">
-                <span class="btn-icon">📡</span> Buscar Dispositivos Próximos
-              </button>
+              <div class="d-flex justify-between align-center mb-2">
+                <h3>🔍 Scanner Bluetooth (BLE)</h3>
+                <div class="d-flex align-center gap-2">
+                  <span id="ble-radar-badge" class="badge badge-radar active">
+                    <span class="pulse-dot"></span> Busca Automática Ativa
+                  </span>
+                  <button id="btn-toggle-auto-scan" class="btn btn-secondary btn-sm" title="Pausar ou Retomar busca automática">
+                    ⏸️ Pausar
+                  </button>
+                </div>
+              </div>
+              <p class="text-sm text-muted mb-3">Varredura automática contínua ativa nesta aba. Clique em <strong>Selecionar</strong> para preencher o formulário.</p>
+              
               <ul id="ble-devices-list" class="device-list">
-                <li class="empty-state">Clique em buscar para escanear antenas Bluetooth.</li>
+                <li class="empty-state">
+                  <div class="spinner-small mb-2"></div>
+                  Escaneando antenas Bluetooth próximas...
+                </li>
               </ul>
             </div>
 
@@ -247,8 +258,9 @@
                 </div>
 
                 <div class="form-group">
-                  <label for="cfg-auth">Auth Key (Chave Hexadecimal de Pareamento)</label>
-                  <input type="password" id="cfg-auth" placeholder="32 caracteres hexadecimais (opcional)" />
+                  <label for="cfg-auth">Auth Key (Chave Hexadecimal de 32 caracteres) *</label>
+                  <input type="text" id="cfg-auth" placeholder="Ex: 3a038e0b73e44fb2291dac86e5a24623" required minlength="32" maxlength="34" />
+                  <small class="form-hint">Obrigatória. Obtida via Zepp Life / Notify App para permitir comunicação BLE criptografada.</small>
                 </div>
 
                 <div class="form-row mb-3">
@@ -285,7 +297,7 @@
                   <input type="hidden" id="cfg-intervals" value="08:00, 12:00, 18:00, 22:00" />
                 </div>
 
-                <div class="d-flex gap-2">
+                <div class="d-flex gap-2 mb-2">
                   <button type="submit" class="btn btn-primary flex-1">Salvar Pulseira</button>
                   <button type="button" id="btn-cancel-edit" class="btn btn-secondary hidden">Cancelar</button>
                 </div>

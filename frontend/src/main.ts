@@ -83,6 +83,70 @@ function renderScheduleBadges() {
   renderScheduleBadges();
 };
 
+let bleScanTimer: any = null;
+let isBleScanning = false;
+let isAutoScanActive = true;
+
+async function performBleScan() {
+  if (isBleScanning || !isAutoScanActive) return;
+  const list = document.getElementById('ble-devices-list');
+  
+  isBleScanning = true;
+  try {
+    const res = await fetch(`${API_URL}/api/ble/scan`);
+    if (!res.ok) throw new Error('Falha ao escanear');
+    const data = await res.json();
+    
+    if (list && isAutoScanActive) {
+      if (!data.devices || data.devices.length === 0) {
+        list.innerHTML = '<li class="empty-state">Nenhum dispositivo BLE detectado por perto no momento.</li>';
+      } else {
+        list.innerHTML = data.devices
+          .map(
+            (d: any) => `
+            <li class="device-item">
+              <div class="device-item-info">
+                <strong>${d.name}</strong>
+                <span>MAC: <code>${d.address}</code> | Sinal: ${d.rssi} dBm</span>
+              </div>
+              <button class="btn btn-secondary btn-sm" onclick="window.selectBleDevice('${d.address}', '${d.name}')">Selecionar</button>
+            </li>
+          `
+          )
+          .join('');
+      }
+    }
+  } catch (e) {
+    if (list && isAutoScanActive && list.children.length === 0) {
+      list.innerHTML = '<li class="empty-state">Aguardando sinal do adaptador Bluetooth...</li>';
+    }
+  } finally {
+    isBleScanning = false;
+  }
+}
+
+function startAutoBleScan() {
+  stopAutoBleScan();
+  isAutoScanActive = true;
+  const badge = document.getElementById('ble-radar-badge');
+  const btnToggle = document.getElementById('btn-toggle-auto-scan');
+  if (badge) {
+    badge.className = 'badge badge-radar active';
+    badge.innerHTML = '<span class="pulse-dot"></span> Busca Automática Ativa';
+  }
+  if (btnToggle) btnToggle.textContent = '⏸️ Pausar';
+
+  performBleScan(); // Primeira execução imediata
+  bleScanTimer = setInterval(performBleScan, 4500); // Repete a cada 4.5s
+}
+
+function stopAutoBleScan() {
+  if (bleScanTimer) {
+    clearInterval(bleScanTimer);
+    bleScanTimer = null;
+  }
+}
+
 // Inicialização de Tabs
 function initTabs() {
   const navButtons = document.querySelectorAll('.nav-item');
@@ -113,20 +177,35 @@ function initTabs() {
         subtitleEl.textContent = titles[tabKey].sub;
       }
 
+      // Ciclo de vida do Scanner BLE: Só roda na aba de Dispositivos
+      if (tabKey === 'devices') {
+        loadDevicesList();
+        renderScheduleBadges();
+        startAutoBleScan();
+      } else {
+        stopAutoBleScan();
+      }
+
       if (tabKey === 'dashboard') {
         loadDashboard();
         loadDashboardCharts();
       }
       if (tabKey === 'history') loadHistory();
-      if (tabKey === 'devices') {
-        loadDevicesList();
-        renderScheduleBadges();
-      }
       if (tabKey === 'integrations') {
         loadIntegrations();
         loadWeatherPreview();
       }
     });
+  });
+
+  // Pausar varredura se o usuário minimizar a janela ou mudar de aba no navegador
+  document.addEventListener('visibilitychange', () => {
+    const activeTab = document.querySelector('.nav-item.active')?.getAttribute('data-tab');
+    if (document.hidden) {
+      stopAutoBleScan();
+    } else if (activeTab === 'devices' && isAutoScanActive) {
+      startAutoBleScan();
+    }
   });
 }
 
@@ -535,78 +614,103 @@ function setupEventListeners() {
   });
 
   // Sincronizar Geral
-  document.getElementById('btn-sync-now')?.addEventListener('click', async () => {
-    showNotification('Iniciando sincronização e clima via Bluetooth...', 'success');
+  const btnSyncNow = document.getElementById('btn-sync-now') as HTMLButtonElement;
+  btnSyncNow?.addEventListener('click', async () => {
+    if (btnSyncNow.disabled) return;
+    btnSyncNow.disabled = true;
+    btnSyncNow.innerHTML = '<span class="btn-icon">⏳</span> Sincronizando...';
+    showNotification('Iniciando sincronização com a Mi Band...', 'success');
+
     try {
-      const res = await fetch(`${API_URL}/api/sync`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+      const res = await fetch(`${API_URL}/api/sync`, { 
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify({}) 
+      });
       const data = await res.json();
       if (data.status === 'SUCCESS') {
-        showNotification('Sincronização concluída com sucesso!', 'success');
+        showNotification('🎉 Sincronização e envio de clima concluídos!', 'success');
         loadDashboard();
         loadDevicesList();
       } else {
         showNotification(data.message || 'Falha ao sincronizar com o relógio.', 'error');
       }
+      loadHistory(); // Atualiza a aba histórico imediatamente
     } catch (e) {
       showNotification('Erro de comunicação com o servidor.', 'error');
+    } finally {
+      btnSyncNow.disabled = false;
+      btnSyncNow.innerHTML = '<span class="btn-icon">🔄</span> Sincronizar Agora';
     }
   });
 
-  // Localizar Pulseira (Vibrar)
-  document.getElementById('btn-find-band')?.addEventListener('click', async () => {
-    showNotification('Enviando sinal de vibração...', 'success');
+  // Localizar Pulseira (Vibrar) com proteção contra cliques repetidos
+  const btnFindBand = document.getElementById('btn-find-band') as HTMLButtonElement;
+  btnFindBand?.addEventListener('click', async () => {
+    if (btnFindBand.disabled) return;
+    btnFindBand.disabled = true;
+    btnFindBand.innerHTML = '<span class="btn-icon">⏳</span> Enviando...';
+    showNotification('Conectando à pulseira para disparar vibração...', 'success');
+
     try {
       const res = await fetch(`${API_URL}/api/vibrate`, { method: 'POST' });
-      if (res.ok) {
-        showNotification('Alerta de vibração enviado!', 'success');
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showNotification('🔔 Comando de vibração disparado na Mi Band 6!', 'success');
       } else {
-        showNotification('Falha ao enviar vibração.', 'error');
+        showNotification(data.message || 'Não foi possível vibrar. Verifique o sinal ou conexão.', 'error');
       }
     } catch (e) {
-      showNotification('Erro de comunicação com o servidor.', 'error');
+      showNotification('Erro ao conectar com o servidor.', 'error');
+    } finally {
+      btnFindBand.disabled = false;
+      btnFindBand.innerHTML = '<span class="btn-icon">🔔</span> Localizar Pulseira';
     }
   });
 
-  // Escanear BLE
-  document.getElementById('btn-scan-ble')?.addEventListener('click', async () => {
-    const list = document.getElementById('ble-devices-list');
-    if (list) list.innerHTML = '<li class="empty-state">Escaneando antenas Bluetooth... aguarde</li>';
-    try {
-      const res = await fetch(`${API_URL}/api/ble/scan`);
-      const data = await res.json();
-      if (list) {
-        if (!data.devices || data.devices.length === 0) {
-          list.innerHTML = '<li class="empty-state">Nenhum dispositivo BLE encontrado por perto.</li>';
-          return;
-        }
-        list.innerHTML = data.devices
-          .map(
-            (d: any) => `
-            <li class="device-item">
-              <div class="device-item-info">
-                <strong>${d.name}</strong>
-                <span>MAC: ${d.address} | RSSI: ${d.rssi} dBm</span>
-              </div>
-              <button class="btn btn-secondary" onclick="window.selectBleDevice('${d.address}', '${d.name}')">Selecionar</button>
-            </li>
-          `
-          )
-          .join('');
+  // Alternar Busca Automática (Pausar / Retomar)
+  document.getElementById('btn-toggle-auto-scan')?.addEventListener('click', () => {
+    const badge = document.getElementById('ble-radar-badge');
+    const btnToggle = document.getElementById('btn-toggle-auto-scan');
+    if (isAutoScanActive) {
+      isAutoScanActive = false;
+      stopAutoBleScan();
+      if (badge) {
+        badge.className = 'badge badge-radar paused';
+        badge.innerHTML = '<span class="pulse-dot"></span> Busca Pausada';
       }
-    } catch (e) {
-      if (list) list.innerHTML = '<li class="empty-state">Erro ao escanear dispositivos.</li>';
+      if (btnToggle) btnToggle.textContent = '▶️ Retomar';
+      showNotification('Busca automática pausada.', 'success');
+    } else {
+      isAutoScanActive = true;
+      startAutoBleScan();
+      if (badge) {
+        badge.className = 'badge badge-radar active';
+        badge.innerHTML = '<span class="pulse-dot"></span> Busca Automática Ativa';
+      }
+      if (btnToggle) btnToggle.textContent = '⏸️ Pausar';
+      showNotification('Busca automática retomada!', 'success');
     }
   });
 
   // Salvar Dispositivo
   document.getElementById('form-config')?.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const mac = (document.getElementById('cfg-mac') as HTMLInputElement).value;
-    const name = (document.getElementById('cfg-name') as HTMLInputElement).value;
-    const auth = (document.getElementById('cfg-auth') as HTMLInputElement).value;
+    const mac = (document.getElementById('cfg-mac') as HTMLInputElement).value.trim();
+    const name = (document.getElementById('cfg-name') as HTMLInputElement).value.trim();
+    let auth = (document.getElementById('cfg-auth') as HTMLInputElement).value.trim();
     const intervalHours = parseInt((document.getElementById('cfg-interval-hours') as HTMLInputElement).value, 10) || 1;
     const intervals = currentScheduleTimes.join(', ');
     const autoWeather = (document.getElementById('cfg-auto-weather') as HTMLInputElement).checked;
+
+    if (auth.startsWith('0x') || auth.startsWith('0X')) {
+      auth = auth.substring(2);
+    }
+
+    if (!auth || auth.length !== 32) {
+      showNotification(`Auth Key inválida (${auth.length} caracteres). Deve conter exatamente 32 caracteres hexadecimais.`, 'error');
+      return;
+    }
 
     try {
       const res = await fetch(`${API_URL}/api/config`, {
@@ -627,7 +731,8 @@ function setupEventListeners() {
         (document.getElementById('btn-cancel-edit') as HTMLElement)?.classList.add('hidden');
         (document.getElementById('form-device-title') as HTMLElement).textContent = '➕ Configurar Dispositivo';
       } else {
-        showNotification('Falha ao salvar dispositivo.', 'error');
+        const data = await res.json().catch(() => ({}));
+        showNotification(data.detail || 'Falha ao salvar dispositivo.', 'error');
       }
     } catch (err) {
       showNotification('Erro na requisição ao servidor.', 'error');

@@ -27,7 +27,10 @@ UUID_CHAR_ALERT = "00002a06-0000-1000-8000-00805f9b34fb"
 class MiBandProtocol:
     def __init__(self, client: BleakClient, auth_key_hex: Optional[str] = None):
         self.client = client
-        self.auth_key = bytes.fromhex(auth_key_hex) if auth_key_hex and len(auth_key_hex) == 32 else None
+        clean_key = auth_key_hex.strip() if auth_key_hex else ""
+        if clean_key.startswith("0x") or clean_key.startswith("0X"):
+            clean_key = clean_key[2:]
+        self.auth_key = bytes.fromhex(clean_key) if len(clean_key) == 32 else None
         self._auth_future: Optional[asyncio.Future] = None
 
     async def authenticate(self) -> bool:
@@ -39,8 +42,8 @@ class MiBandProtocol:
         4. Devolve o desafio encriptado com prefixo (0x03, 0x00, bytes...)
         """
         if not self.auth_key:
-            logger.info("Nenhuma Auth Key fornecida. Prosseguindo sem autenticação Huami customizada.")
-            return True
+            logger.error("Auth Key não fornecida ou inválida (deve conter 32 caracteres hexadecimais).")
+            return False
 
         try:
             loop = asyncio.get_running_loop()
@@ -50,24 +53,27 @@ class MiBandProtocol:
             
             # Solicitar desafio
             logger.info("Solicitando desafio de autenticação à Mi Band...")
-            await self.client.write_gatt_char(UUID_CHAR_AUTH, bytearray([0x02, 0x00]), response=True)
+            await self.client.write_gatt_char(UUID_CHAR_AUTH, bytearray([0x02, 0x00]), response=False)
 
-            # Aguardar resposta (timeout de 8 segundos)
-            auth_success = await asyncio.wait_for(self._auth_future, timeout=8.0)
+            # Aguardar resposta (timeout de 10 segundos)
+            auth_success = await asyncio.wait_for(self._auth_future, timeout=10.0)
             await self.client.stop_notify(UUID_CHAR_AUTH)
             return auth_success
         except Exception as e:
             logger.warning(f"Falha durante processo de autenticação: {e}")
+            try:
+                await self.client.stop_notify(UUID_CHAR_AUTH)
+            except Exception:
+                pass
             return False
 
     def _auth_notification_handler(self, sender: int, data: bytearray):
         """Manipulador de pacotes de autenticação recebidos"""
-        if data[:3] == bytearray([0x10, 0x01, 0x01]):
-            logger.info("Chave enviada aceita.")
-        elif data[:3] == bytearray([0x10, 0x02, 0x01]):
+        logger.info(f"Recebido pacote de autenticação Huami: {data.hex()}")
+        if data[:3] == bytearray([0x10, 0x02, 0x01]):
             # Recebeu o desafio (data[3:] = 16 bytes)
             random_challenge = bytes(data[3:19])
-            logger.info(f"Desafio de autenticação recebido ({len(random_challenge)} bytes). Encriptando...")
+            logger.info(f"Desafio de autenticação recebido ({len(random_challenge)} bytes). Encriptando com AES-ECB...")
             
             # Criptografia AES-ECB
             cipher = Cipher(algorithms.AES(self.auth_key), modes.ECB())
@@ -76,16 +82,19 @@ class MiBandProtocol:
 
             # Enviar resposta encriptada
             response_pkt = bytearray([0x03, 0x00]) + encrypted
-            asyncio.create_task(self.client.write_gatt_char(UUID_CHAR_AUTH, response_pkt, response=True))
+            asyncio.create_task(self.client.write_gatt_char(UUID_CHAR_AUTH, response_pkt, response=False))
 
         elif data[:3] == bytearray([0x10, 0x03, 0x01]):
-            logger.info("Autenticação com a Mi Band 6 concluída com SUCESSO!")
+            logger.info("Autenticação com a Mi Band concluída com SUCESSO!")
             if self._auth_future and not self._auth_future.done():
                 self._auth_future.set_result(True)
-        else:
-            logger.warning(f"Resposta de autenticação inesperada: {data.hex()}")
+        elif data[:3] == bytearray([0x10, 0x02, 0x00]) or data[:3] == bytearray([0x10, 0x03, 0x00]) or data[:3] == bytearray([0x10, 0x02, 0x81]) or data[:3] == bytearray([0x10, 0x03, 0x81]):
+            logger.warning(f"Falha ou chave incorreta na autenticação da Mi Band: {data.hex()}")
             if self._auth_future and not self._auth_future.done():
                 self._auth_future.set_result(False)
+        else:
+            logger.warning(f"Resposta de autenticação não padrão: {data.hex()}")
+
 
     async def read_battery(self) -> Optional[int]:
         """Lê o nível de carga da bateria (0 a 100%)"""
@@ -111,12 +120,21 @@ class MiBandProtocol:
         return {"steps": 0, "distance_meters": 0, "calories": 0}
 
     async def trigger_vibrate(self, count: int = 1):
-        """Envia comando de vibração/alerta para a pulseira"""
+        """Envia comando de vibração/alerta para a pulseira (0x02 = High Alert / Vibração perceptível)"""
         try:
-            await self.client.write_gatt_char(UUID_CHAR_ALERT, bytearray([0x01]), response=False)
-            logger.info(f"Vibração disparada na Mi Band ({count}x).")
+            # 0x02 ativa a vibração física com display de alerta na Mi Band 6
+            await self.client.write_gatt_char(UUID_CHAR_ALERT, bytearray([0x02]), response=False)
+            logger.info(f"Vibração disparada na Mi Band 6 ({count}x).")
+            return True
         except Exception as e:
-            logger.warning(f"Não foi possível enviar alerta de vibração: {e}")
+            logger.warning(f"Não foi possível enviar alerta de vibração (tentativa 1): {e}")
+            try:
+                # Fallback com response=True caso o stack BLE exija
+                await self.client.write_gatt_char(UUID_CHAR_ALERT, bytearray([0x02]), response=True)
+                return True
+            except Exception as e2:
+                logger.error(f"Falha definitiva ao enviar vibração: {e2}")
+                return False
 
     async def sync_time(self, custom_time: Optional[datetime.datetime] = None) -> bool:
         """Envia data/hora atualizada para sincronizar o relógio da Mi Band"""

@@ -14,7 +14,7 @@ router = APIRouter()
 
 class DeviceCreate(BaseModel):
     mac_address: str
-    auth_key: Optional[str] = None
+    auth_key: str  # Obrigatória para comunicação Huami AES
     device_name: Optional[str] = "Mi Smart Band 6"
     sync_interval_hours: Optional[int] = 1
     sync_intervals: Optional[str] = "08:00,12:00,18:00,22:00"
@@ -83,9 +83,20 @@ def get_primary_device_config(session: Session = Depends(get_session)):
 
 @router.post("/config", response_model=DeviceConfig)
 def save_device_config(data: DeviceCreate, session: Session = Depends(get_session)):
-    existing = session.exec(select(DeviceConfig).where(DeviceConfig.mac_address == data.mac_address)).first()
+    clean_mac = data.mac_address.strip().upper()
+    clean_key = data.auth_key.strip()
+    if clean_key.startswith("0x") or clean_key.startswith("0X"):
+        clean_key = clean_key[2:]
+        
+    if len(clean_key) != 32:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Auth Key inválida ({len(clean_key)} caracteres). Deve conter exatamente 32 caracteres hexadecimais."
+        )
+
+    existing = session.exec(select(DeviceConfig).where(DeviceConfig.mac_address == clean_mac)).first()
     if existing:
-        existing.auth_key = data.auth_key or existing.auth_key
+        existing.auth_key = clean_key
         existing.device_name = data.device_name or existing.device_name
         if data.sync_interval_hours is not None:
             existing.sync_interval_hours = data.sync_interval_hours
@@ -103,7 +114,15 @@ def save_device_config(data: DeviceCreate, session: Session = Depends(get_sessio
         reload_scheduler_jobs()
         return existing
 
-    new_device = DeviceConfig(**data.model_dump())
+    new_device = DeviceConfig(
+        mac_address=clean_mac,
+        auth_key=clean_key,
+        device_name=data.device_name or "Mi Smart Band 6",
+        sync_interval_hours=data.sync_interval_hours or 1,
+        sync_intervals=data.sync_intervals or "08:00,12:00,18:00,22:00",
+        auto_weather=data.auto_weather if data.auto_weather is not None else True,
+        is_active=data.is_active if data.is_active is not None else True
+    )
     session.add(new_device)
     session.commit()
     session.refresh(new_device)
@@ -281,8 +300,18 @@ async def trigger_vibrate(session: Session = Depends(get_session)):
     dev = session.exec(select(DeviceConfig).order_by(DeviceConfig.id.desc())).first()
     if not dev:
         raise HTTPException(status_code=400, detail="Nenhum dispositivo configurado")
+    
+    if not dev.auth_key:
+        raise HTTPException(status_code=400, detail="Dispositivo não possui Auth Key cadastrada")
+
     success = await miband_service.send_vibrate_alert(dev.mac_address, dev.auth_key)
-    return {"success": success, "mac": dev.mac_address}
+    if not success:
+        return {
+            "success": False, 
+            "mac": dev.mac_address, 
+            "message": "Não foi possível conectar à pulseira. Certifique-se de que o Bluetooth do celular está desconectado da Mi Band ou que ela está ao alcance."
+        }
+    return {"success": True, "mac": dev.mac_address, "message": "Comando de vibração enviado com sucesso!"}
 
 @router.get("/metrics/latest", response_model=Optional[ActivityLog])
 def get_latest_metrics(mac: Optional[str] = None, session: Session = Depends(get_session)):
