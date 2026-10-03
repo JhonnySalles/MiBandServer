@@ -1,4 +1,6 @@
 import asyncio
+import struct
+import datetime
 from typing import Optional, Callable
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from bleak import BleakClient
@@ -8,10 +10,11 @@ from app.core.logger import logger
 UUID_SERVICE_AUTH = "00000fee1-0000-1000-8000-00805f9b34fb"
 UUID_CHAR_AUTH = "00000009-0000-3512-2118-0009af100700"
 
-# UUIDs de Informações Básicas e Atividades
+# UUIDs de Informações Básicas, Tempo e Atividades
 UUID_SERVICE_BASIC = "0000fee0-0000-1000-8000-00805f9b34fb"
 UUID_CHAR_STEPS = "00000007-0000-3512-2118-0009af100700"
 UUID_CHAR_BATTERY = "00000006-0000-3512-2118-0009af100700"
+UUID_CHAR_CURRENT_TIME = "00002a2b-0000-1000-8000-00805f9b34fb"
 
 # UUIDs de Frequência Cardíaca (Padrão BLE Heart Rate Service)
 UUID_SERVICE_HEART_RATE = "0000180d-0000-1000-8000-00805f9b34fb"
@@ -114,3 +117,29 @@ class MiBandProtocol:
             logger.info(f"Vibração disparada na Mi Band ({count}x).")
         except Exception as e:
             logger.warning(f"Não foi possível enviar alerta de vibração: {e}")
+
+    async def sync_time(self, custom_time: Optional[datetime.datetime] = None) -> bool:
+        """Envia data/hora atualizada para sincronizar o relógio da Mi Band"""
+        try:
+            now = custom_time or datetime.datetime.now()
+            # Formato padrão 10 bytes BLE Current Time (0x2A2B):
+            # year (2 bytes little endian), month (1 byte), day (1 byte), hour (1 byte), minute (1 byte), second (1 byte), day_of_week (1 byte), fractions256 (1 byte), adjust_reason (1 byte)
+            payload = struct.pack(
+                '<HBBBBBBBB',
+                now.year,
+                now.month,
+                now.day,
+                now.hour,
+                now.minute,
+                now.second,
+                now.isoweekday(),
+                0,
+                0
+            )
+            await self.client.write_gatt_char(UUID_CHAR_CURRENT_TIME, payload, response=True)
+            logger.info(f"Horário sincronizado com sucesso na Mi Band: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+            return True
+        except Exception as e:
+            logger.warning(f"Não foi possível sincronizar horário via GATT: {e}")
+            return False
+

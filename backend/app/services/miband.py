@@ -48,7 +48,10 @@ class MiBandService:
                         # Handshake de autenticação
                         auth_ok = await protocol.authenticate()
                         if auth_ok:
-                            logger.info("Autenticado! Lendo métricas...")
+                            logger.info("Autenticado! Sincronizando horário...")
+                            await protocol.sync_time()
+
+                            logger.info("Lendo métricas da pulseira...")
                             battery = await protocol.read_battery()
                             activity = await protocol.read_steps()
                             
@@ -60,21 +63,12 @@ class MiBandService:
                                 "battery_level": battery
                             }
             except Exception as ble_err:
-                logger.warning(f"Aviso de comunicação BLE ({ble_err}). Utilizando valores simulados para teste.")
+                logger.warning(f"Aviso de comunicação BLE ({ble_err}).")
 
             if real_data:
                 return {"status": "SUCCESS", "data": real_data}
 
-            # Dados simulados para ambiente de desenvolvimento / teste
-            import random
-            synced_data = {
-                "steps": random.randint(3200, 10500),
-                "distance_meters": random.randint(2200, 7200),
-                "calories": random.randint(140, 520),
-                "heart_rate": random.randint(65, 88),
-                "battery_level": random.randint(60, 95)
-            }
-            return {"status": "SUCCESS", "data": synced_data}
+            return {"status": "ERROR", "message": "Falha na comunicação ou autenticação com a pulseira."}
 
         except Exception as e:
             logger.error(f"Erro na sincronização: {e}")
@@ -82,19 +76,23 @@ class MiBandService:
         finally:
             self._is_syncing = False
 
-    async def send_weather_info(self, mac_address: str, temp: int, condition: str) -> bool:
+    async def send_weather_info(self, mac_address: str, temp: int, condition: str, auth_key: Optional[str] = None) -> bool:
         """Envia previsão do tempo / clima para a tela do relógio"""
         logger.info(f"Enviando dados de clima para {mac_address}: {temp}°C, {condition}")
         return True
 
-    async def send_vibrate_alert(self, mac_address: str) -> bool:
+    async def send_vibrate_alert(self, mac_address: str, auth_key: Optional[str] = None) -> bool:
         """Dispara vibração no relógio para localizar ou alertar"""
         try:
-            async with BleakClient(mac_address, timeout=8.0) as client:
+            async with BleakClient(mac_address, timeout=10.0) as client:
                 if client.is_connected:
-                    protocol = MiBandProtocol(client)
-                    await protocol.trigger_vibrate(1)
-                    return True
+                    protocol = MiBandProtocol(client, auth_key)
+                    auth_ok = await protocol.authenticate()
+                    if auth_ok:
+                        await protocol.trigger_vibrate(1)
+                        return True
+                    else:
+                        logger.warning(f"Falha de autenticação ao tentar vibrar pulseira {mac_address}")
         except Exception as e:
             logger.warning(f"Não foi possível enviar vibração: {e}")
         return False

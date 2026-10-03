@@ -6,3 +6,4 @@ __pycache__/
 logs/
 .env.local
 .env
+backend/data/miband.db

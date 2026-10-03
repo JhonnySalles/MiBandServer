@@ -49,7 +49,7 @@ async def execute_sync_workflow(mac_address: str, auth_key: Optional[str] = None
             cond = cur.get("condition", "Ensolarado")
             
             # Enviar para a Mi Band
-            await miband_service.send_weather_info(mac_address, temp, cond)
+            await miband_service.send_weather_info(mac_address, temp, cond, auth_key)
             weather_info_str = f" | Clima: {temp}°C ({cond})"
             logger.info(f"[{source}] Clima enviado com sucesso para {mac_address}")
         except Exception as e:

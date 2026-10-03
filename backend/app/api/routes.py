@@ -273,7 +273,7 @@ async def send_weather(req: WeatherRequest, session: Session = Depends(get_sessi
         temp = w["temp"]
         condition = w["condition"]
 
-    success = await miband_service.send_weather_info(dev.mac_address, temp, condition)
+    success = await miband_service.send_weather_info(dev.mac_address, temp, condition, dev.auth_key)
     return {"success": success, "sent_to": dev.mac_address, "temp": temp, "condition": condition}
 
 @router.post("/vibrate")
@@ -281,7 +281,7 @@ async def trigger_vibrate(session: Session = Depends(get_session)):
     dev = session.exec(select(DeviceConfig).order_by(DeviceConfig.id.desc())).first()
     if not dev:
         raise HTTPException(status_code=400, detail="Nenhum dispositivo configurado")
-    success = await miband_service.send_vibrate_alert(dev.mac_address)
+    success = await miband_service.send_vibrate_alert(dev.mac_address, dev.auth_key)
     return {"success": success, "mac": dev.mac_address}
 
 @router.get("/metrics/latest", response_model=Optional[ActivityLog])
