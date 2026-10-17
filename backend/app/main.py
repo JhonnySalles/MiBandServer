@@ -7,6 +7,7 @@ from app.core.database import init_db, engine, DeviceConfig, IntegrationConfig, 
 from app.core.cache import cache
 from app.core.scheduler import start_scheduler
 from app.api.routes import router
+from app.api.test_routes import router as test_router
 from sqlmodel import Session, select
 
 # Configurar logging centralizado
@@ -70,3 +71,4 @@ app.add_middleware(
 app.add_middleware(RequestLoggingMiddleware)
 
 app.include_router(router, prefix="/api")
+app.include_router(test_router, prefix="/api/test")

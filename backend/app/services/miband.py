@@ -73,7 +73,7 @@ class MiBandService:
                 for attempt in range(1, 3):
                     try:
                         logger.info(f"Tentativa {attempt}/2 de conexão BLE com {mac_address}...")
-                        async with BleakClient(mac_address, timeout=12.0) as client:
+                        async with BleakClient(mac_address, timeout=15.0) as client:
                             if client.is_connected:
                                 logger.info("Conexão BLE estabelecida com sucesso!")
                                 protocol = MiBandProtocol(client, clean_key)
@@ -124,11 +124,7 @@ class MiBandService:
 
     async def send_vibrate_alert(self, mac_address: str, auth_key: Optional[str] = None) -> bool:
         """Dispara vibração no relógio para localizar ou alertar com proteção de concorrência"""
-        if not auth_key:
-            logger.warning("Tentativa de vibrar pulseira sem Auth Key.")
-            return False
-
-        clean_key = auth_key.strip()
+        clean_key = auth_key.strip() if auth_key else ""
         if clean_key.startswith("0x") or clean_key.startswith("0X"):
             clean_key = clean_key[2:]
 
@@ -137,16 +133,23 @@ class MiBandService:
                 for attempt in range(1, 3):
                     try:
                         logger.info(f"Enviando comando de vibração para {mac_address} (tentativa {attempt}/2)...")
-                        async with BleakClient(mac_address, timeout=8.0) as client:
+                        async with BleakClient(mac_address, timeout=15.0) as client:
                             if client.is_connected:
                                 protocol = MiBandProtocol(client, clean_key)
-                                auth_ok = await protocol.authenticate()
-                                if auth_ok:
-                                    success = await protocol.trigger_vibrate(1)
-                                    return success
-                                else:
-                                    logger.warning(f"Falha de autenticação ao tentar vibrar pulseira {mac_address}")
-                                    return False
+                                
+                                # 1. Se possuir Auth Key, autentica primeiro (imprescindível para o motor físico aceitar comandos)
+                                if clean_key:
+                                    logger.info("Iniciando autenticação Huami antes do disparo de vibração...")
+                                    auth_ok = await protocol.authenticate()
+                                    if auth_ok:
+                                        logger.info("Pulseira autenticada! Disparando motor de vibração...")
+                                        return await protocol.trigger_vibrate(2, "Localizar MiBand")
+                                    else:
+                                        logger.warning(f"Falha de autenticação ao tentar vibrar pulseira {mac_address}")
+
+                                # 2. Disparo direto como fallback se não houver chave ou auth falhar
+                                logger.info("Tentando acionar alerta de vibração direto em {mac_address}...")
+                                return await protocol.trigger_vibrate(1)
                     except Exception as attempt_err:
                         logger.warning(f"Tentativa {attempt} de vibrar falhou ({attempt_err}).")
                         await asyncio.sleep(0.5)

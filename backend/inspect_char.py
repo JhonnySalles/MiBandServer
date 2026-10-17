@@ -2,13 +2,18 @@ import asyncio
 from bleak import BleakClient
 
 async def main():
+    mac = 'CF:40:F9:D0:BD:0A'
+    print(f"Conectando a {mac} para inspecionar serviços...")
     try:
-        async with BleakClient('CF:40:F9:D0:BD:0A') as client:
+        async with BleakClient(mac, timeout=12.0) as client:
+            print("Conectado com sucesso!\n")
             for service in client.services:
+                print(f"SERVIÇO: {service.uuid} ({service.description})")
                 for char in service.characteristics:
-                    if char.uuid.lower() == '00000009-0000-3512-2118-0009af100700':
-                        print(f'Auth Char Properties: {char.properties}')
+                    print(f"   -> Característica: {char.uuid} | Props: {char.properties} ({char.description})")
+                print()
     except Exception as e:
-        print(f"Erro: {e}")
+        print(f"Erro ao inspecionar: {e}")
 
-asyncio.run(main())
+if __name__ == '__main__':
+    asyncio.run(main())

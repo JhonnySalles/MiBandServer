@@ -1,10 +1,55 @@
+# ==========================================
+# Ambientes e Variáveis Secretas (.env)
+# ==========================================
+.env
+.env.*
+!.env.example
+!.env.template
+
+# ==========================================
+# Bancos de Dados Locais e Credenciais
+# ==========================================
+*.db
+*.sqlite
+*.sqlite3
+data/
+backend/data/
+
+# ==========================================
+# Logs e Arquivos Temporários
+# ==========================================
+*.log
+logs/
+backend/logs/
+/logs/
+/backend/logs/
+
+# ==========================================
+# Cache e Ambientes Virtuais (Python & Node)
+# ==========================================
+.venv/
+env/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
 node_modules/
 dist/
-.venv/
-__pycache__/
-*.pyc
-logs/
-.env.local
-.env
-backend/data/miband.db
-/backend/logs
+frontend/dist/
+
+# ==========================================
+# Redis Local Dump
+# ==========================================
+dump.rdb
+
+# ==========================================
+# IDEs e Sistema Operacional
+# ==========================================
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store

@@ -117,6 +117,7 @@ class WeatherService:
                 return {
                     "temp": temp,
                     "condition": condition,
+                    "code": w_code,
                     "humidity": current.get("relative_humidity_2m", 50),
                     "provider": "Open-Meteo"
                 }
@@ -152,18 +153,21 @@ class WeatherService:
                 day_names = ["Hoje", "Amanhã", "Depois", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
                 for i in range(min(len(time_list), 5)):
                     label = day_names[i] if i < len(day_names) else time_list[i]
+                    code_val = codes_list[i] if i < len(codes_list) else current_code
                     daily_forecast.append({
                         "date": time_list[i],
                         "day": label,
+                        "code": code_val,
                         "temp_max": round(max_list[i]) if i < len(max_list) else current_temp + 2,
                         "temp_min": round(min_list[i]) if i < len(min_list) else current_temp - 3,
-                        "condition": self._map_weather_code(codes_list[i]) if i < len(codes_list) else current_cond
+                        "condition": self._map_weather_code(code_val)
                     })
 
                 return {
                     "current": {
                         "temp": current_temp,
                         "condition": current_cond,
+                        "code": current_code,
                         "humidity": current_data.get("relative_humidity_2m", 50),
                         "provider": "Open-Meteo"
                     },

@@ -40,6 +40,10 @@
             <span class="icon">⛅</span>
             <span>Integrações & Clima</span>
           </button>
+          <button class="nav-item" data-tab="test">
+            <span class="icon">🧪</span>
+            <span>Teste</span>
+          </button>
         </nav>
 
         <div class="sidebar-footer">
@@ -379,6 +383,302 @@
                 <button id="btn-refresh-weather-preview" class="btn btn-secondary mt-3 w-100">
                   🔄 Testar Conexão / Atualizar Prévia
                 </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- TAB: TESTES & DIAGNÓSTICO -->
+        <section id="tab-test" class="tab-content">
+          <div class="test-top-bar card mb-4">
+            <div class="d-flex justify-between align-center flex-wrap gap-3">
+              <div>
+                <div class="d-flex align-center gap-2">
+                  <h3>🧪 Laboratório de Testes Mi Band 6</h3>
+                  <span class="badge badge-test-mode">Modo Teste — Isolado</span>
+                </div>
+                <p class="text-sm text-muted mt-1">
+                  Execute leituras e testes individuais diretamente com a pulseira. <strong>Nenhum dado é salvo no histórico ou sobrescreve métricas do aplicativo</strong> (apenas o relógio e clima podem ser enviados para a pulseira).
+                </p>
+              </div>
+              <div class="d-flex align-center gap-2">
+                <button id="btn-test-read-all" class="btn btn-primary">
+                  <span>🔄</span> Sincronizar Tudo
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Cards de Métricas & Diagnóstico -->
+          <div class="test-cards-grid mb-4">
+            <!-- 1. Atividade Física -->
+            <div class="card test-card" id="card-test-activity">
+              <div class="test-card-header">
+                <span class="test-card-icon">👟</span>
+                <h4>Atividade Atual</h4>
+                <button class="btn btn-secondary btn-sm test-action-btn" id="btn-test-activity">Ler</button>
+              </div>
+              <div class="test-card-body">
+                <div class="test-stat-row">
+                  <span class="test-label">Passos:</span>
+                  <strong class="test-value" id="test-val-steps">--</strong>
+                </div>
+                <div class="test-stat-row">
+                  <span class="test-label">Distância:</span>
+                  <strong class="test-value" id="test-val-distance">-- m</strong>
+                </div>
+                <div class="test-stat-row">
+                  <span class="test-label">Calorias:</span>
+                  <strong class="test-value" id="test-val-calories">-- kcal</strong>
+                </div>
+              </div>
+              <div class="test-card-footer">
+                <span class="text-muted text-xs" id="test-time-activity">Aguardando leitura</span>
+              </div>
+            </div>
+
+            <!-- 2. Bateria Detalhada -->
+            <div class="card test-card" id="card-test-battery">
+              <div class="test-card-header">
+                <span class="test-card-icon">🔋</span>
+                <h4>Bateria</h4>
+                <button class="btn btn-secondary btn-sm test-action-btn" id="btn-test-battery">Ler</button>
+              </div>
+              <div class="test-card-body">
+                <div class="test-stat-row">
+                  <span class="test-label">Nível:</span>
+                  <strong class="test-value" id="test-val-battery">--%</strong>
+                </div>
+                <div class="battery-bar-container w-100 my-1">
+                  <div class="battery-bar" id="test-battery-bar" style="width: 0%"></div>
+                </div>
+                <div class="test-stat-row">
+                  <span class="test-label">Estado:</span>
+                  <span class="test-value-sm" id="test-val-battery-status">--</span>
+                </div>
+                <div class="test-stat-row">
+                  <span class="test-label">Última Carga:</span>
+                  <span class="test-value-sm" id="test-val-battery-charge">--</span>
+                </div>
+              </div>
+              <div class="test-card-footer">
+                <span class="text-muted text-xs" id="test-time-battery">Aguardando leitura</span>
+              </div>
+            </div>
+
+            <!-- 3. Frequência Cardíaca (PPG) -->
+            <div class="card test-card" id="card-test-heart">
+              <div class="test-card-header">
+                <span class="test-card-icon">❤️</span>
+                <h4>Frequência Cardíaca</h4>
+                <button class="btn btn-secondary btn-sm test-action-btn" id="btn-test-heart">Medir</button>
+              </div>
+              <div class="test-card-body">
+                <div class="test-stat-row">
+                  <span class="test-label">Batimentos:</span>
+                  <strong class="test-value text-danger" id="test-val-heart">-- <small>BPM</small></strong>
+                </div>
+                <p class="text-xs text-muted mt-2">
+                  Ao clicar em <em>Medir</em>, o sensor óptico no fundo da pulseira é acionado. Mantenha no pulso por até 25s.
+                </p>
+              </div>
+              <div class="test-card-footer">
+                <span class="text-muted text-xs" id="test-time-heart">Aguardando medição</span>
+              </div>
+            </div>
+
+            <!-- 4. Relógio & Desvio de Fuso -->
+            <div class="card test-card" id="card-test-clock">
+              <div class="test-card-header">
+                <span class="test-card-icon">🕒</span>
+                <h4>Relógio da Pulseira</h4>
+                <div class="d-flex gap-1">
+                  <button class="btn btn-secondary btn-sm test-action-btn" id="btn-test-time-read">Ler</button>
+                  <button class="btn btn-primary btn-sm test-action-btn" id="btn-test-time-sync" title="Ajustar relógio da pulseira">Ajustar</button>
+                </div>
+              </div>
+              <div class="test-card-body">
+                <div class="test-stat-row">
+                  <span class="test-label">Hora Pulseira:</span>
+                  <strong class="test-value-sm" id="test-val-band-time">--</strong>
+                </div>
+                <div class="test-stat-row">
+                  <span class="test-label">Hora Servidor:</span>
+                  <span class="test-value-sm text-muted" id="test-val-server-time">--</span>
+                </div>
+                <div class="test-stat-row">
+                  <span class="test-label">Diferença:</span>
+                  <span class="badge" id="test-val-drift">--</span>
+                </div>
+              </div>
+              <div class="test-card-footer">
+                <span class="text-muted text-xs" id="test-time-clock">Aguardando verificação</span>
+              </div>
+            </div>
+
+            <!-- 5. Informações do Dispositivo (DIS) -->
+            <div class="card test-card" id="card-test-device-info">
+              <div class="test-card-header">
+                <span class="test-card-icon">ℹ️</span>
+                <h4>Dados do Aparelho</h4>
+                <button class="btn btn-secondary btn-sm test-action-btn" id="btn-test-device-info">Ler</button>
+              </div>
+              <div class="test-card-body">
+                <div class="test-stat-row">
+                  <span class="test-label">Modelo:</span>
+                  <strong class="test-value-sm" id="test-val-model">--</strong>
+                </div>
+                <div class="test-stat-row">
+                  <span class="test-label">Firmware:</span>
+                  <span class="test-value-sm" id="test-val-fw">--</span>
+                </div>
+                <div class="test-stat-row">
+                  <span class="test-label">Hardware:</span>
+                  <span class="test-value-sm text-muted" id="test-val-hw">--</span>
+                </div>
+                <div class="test-stat-row">
+                  <span class="test-label">Serial:</span>
+                  <span class="test-value-sm text-muted" id="test-val-serial">--</span>
+                </div>
+              </div>
+              <div class="test-card-footer">
+                <span class="text-muted text-xs" id="test-time-device-info">Aguardando leitura</span>
+              </div>
+            </div>
+
+            <!-- 6. Alarmes na Pulseira -->
+            <div class="card test-card" id="card-test-alarms">
+              <div class="test-card-header">
+                <span class="test-card-icon">⏰</span>
+                <h4>Alarmes Configurados</h4>
+                <button class="btn btn-secondary btn-sm test-action-btn" id="btn-test-alarms">Ler</button>
+              </div>
+              <div class="test-card-body">
+                <div id="test-alarms-list" class="test-alarms-container">
+                  <span class="text-muted text-xs">Nenhum alarme carregado ainda.</span>
+                </div>
+              </div>
+              <div class="test-card-footer">
+                <span class="text-muted text-xs" id="test-time-alarms">Aguardando consulta</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Seção de Teste de Clima -->
+          <div class="card mb-4">
+            <div class="d-flex justify-between align-center flex-wrap gap-2 mb-3">
+              <div>
+                <h3>🌤️ Teste de Envio de Previsão do Tempo</h3>
+                <p class="text-sm text-muted">
+                  Edite os dados dos cards abaixo (Temperatura e Condição) e envie para a Mi Band 6 testar a exibição na tela do relógio.
+                </p>
+              </div>
+              <div class="d-flex gap-2">
+                <button id="btn-test-weather-fetch" class="btn btn-secondary">
+                  <span>🌐</span> Buscar Previsão da Internet
+                </button>
+                <button id="btn-test-weather-send" class="btn btn-primary">
+                  <span>📤</span> Enviar para Pulseira
+                </button>
+              </div>
+            </div>
+
+            <div class="form-group mb-3" style="max-width: 320px;">
+              <label for="test-weather-city">Nome da Cidade / Localidade</label>
+              <input type="text" id="test-weather-city" value="São Paulo" />
+            </div>
+
+            <div class="forecast-editor-grid" id="test-weather-cards-container">
+              <!-- Card Hoje fixo inicial (será enriquecido dinamicamente) -->
+              <div class="forecast-edit-card today">
+                <span class="day-badge">Hoje (Atual)</span>
+                <div class="form-group my-2">
+                  <label>Temp Atual (°C)</label>
+                  <input type="number" id="test-weather-today-temp" value="24" />
+                </div>
+                <div class="form-group">
+                  <label>Condição</label>
+                  <input type="text" id="test-weather-today-cond" value="Ensolarado" />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Seção de Notificação & Vibração -->
+          <div class="grid-two-cols mb-4">
+            <div class="card">
+              <h3>📲 Teste de Notificação no Display</h3>
+              <p class="text-sm text-muted mb-3">
+                Dispara um pop-up com texto na tela da pulseira utilizando as categorias nativas BLE New Alert.
+              </p>
+              <form id="form-test-notify">
+                <div class="form-group">
+                  <label for="test-notify-category">Categoria do Alerta</label>
+                  <select id="test-notify-category" class="form-select">
+                    <option value="3" selected>Chamada Telefônica (Incoming Call)</option>
+                    <option value="0">Alerta Simples (Simple Alert)</option>
+                    <option value="5">SMS / Mensagem</option>
+                    <option value="1">E-mail</option>
+                    <option value="7">Compromisso / Calendário</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label for="test-notify-title">Título / Remetente</label>
+                  <input type="text" id="test-notify-title" value="MiBand Hub" />
+                </div>
+                <div class="form-group">
+                  <label for="test-notify-text">Mensagem de Texto</label>
+                  <input type="text" id="test-notify-text" value="Teste de comunicação em tempo real!" />
+                </div>
+                <button type="submit" class="btn btn-primary w-100">
+                  <span>📨</span> Enviar Notificação para Pulseira
+                </button>
+              </form>
+            </div>
+
+            <div class="card">
+              <h3>📳 Teste de Vibração do Motor Haptic</h3>
+              <p class="text-sm text-muted mb-3">
+                Aciona o motor vibratório físico com texto de localização e múltiplos pulsos.
+              </p>
+              <div class="form-group">
+                <label for="test-vibrate-count">Repetições de Vibração</label>
+                <select id="test-vibrate-count" class="form-select">
+                  <option value="1">1 vez (curta)</option>
+                  <option value="2" selected>2 vezes (padrão localizar)</option>
+                  <option value="3">3 vezes (chamada persistente)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="test-vibrate-text">Texto exibido na tela</label>
+                <input type="text" id="test-vibrate-text" value="Localizar MiBand" />
+              </div>
+              <button type="button" id="btn-test-trigger-vibrate" class="btn btn-secondary w-100 mt-2">
+                <span>🔔</span> Acionar Vibração Imediata
+              </button>
+            </div>
+          </div>
+
+          <!-- Console de Log & Diagnóstico em Tempo Real -->
+          <div class="card">
+            <div class="d-flex justify-between align-center mb-2">
+              <div class="d-flex align-center gap-2">
+                <h3>🖥️ Console de Logs & Diagnóstico</h3>
+                <span class="badge" id="test-console-status">Pronto</span>
+              </div>
+              <div class="d-flex gap-2">
+                <button id="btn-test-clear-logs" class="btn btn-secondary btn-sm">Limpar</button>
+                <button id="btn-test-copy-logs" class="btn btn-secondary btn-sm">Copiar</button>
+              </div>
+            </div>
+            <p class="text-sm text-muted mb-2">
+              Visualize cada comando BLE, pacotes hexadecimais, respostas da pulseira e possíveis erros em tempo real.
+            </p>
+            <div id="test-console-output" class="test-console-box">
+              <div class="console-line info">
+                <span class="console-ts">00:00:00</span>
+                <span class="console-badge info">INFO</span>
+                <span class="console-msg">Laboratório de Testes pronto. Selecione uma ação ou clique em Sincronizar Tudo.</span>
               </div>
             </div>
           </div>

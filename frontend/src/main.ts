@@ -1,3 +1,5 @@
+import { initTestTab } from './test-tab';
+
 // Obter a URL base da API a partir de envs injetadas ou inferir pela origem / padrão 8190
 const API_URL = (import.meta as any).env?.VITE_API_URL || 
   (typeof window !== 'undefined' && window.location.hostname 
@@ -158,7 +160,8 @@ function initTabs() {
     dashboard: { title: 'Painel de Métricas', sub: 'Sincronização em tempo real do Raspberry Pi com sua Mi Band' },
     history: { title: 'Histórico de Atividades', sub: 'Registros de sincronizações e leituras anteriores' },
     devices: { title: 'Gerenciador de Dispositivos', sub: 'Pareamento Bluetooth, múltiplos aparelhos e agendamentos' },
-    integrations: { title: 'Integrações & Cache', sub: 'Tokens meteorológicos, cache em memória RAM e proteção do SD' }
+    integrations: { title: 'Integrações & Cache', sub: 'Tokens meteorológicos, cache em memória RAM e proteção do SD' },
+    test: { title: 'Laboratório de Testes & Diagnóstico', sub: 'Testes isolados de comunicação e envio de dados para a Mi Band' }
   };
 
   navButtons.forEach((btn) => {
@@ -838,6 +841,7 @@ window.addEventListener('DOMContentLoaded', () => {
   checkSystemStatus();
   loadDevicesList();
   loadDashboard();
+  initTestTab(API_URL, showNotification);
 });
 
 

@@ -33,3 +33,4 @@ echo ==========================================
 echo   Backend - Iniciando FastAPI na Porta %BACKEND_PORT%
 echo ==========================================
 uvicorn app.main:app --host 0.0.0.0 --port %BACKEND_PORT% --reload
+
