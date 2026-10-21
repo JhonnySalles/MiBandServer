@@ -104,7 +104,7 @@ class WeatherService:
             params = {
                 "latitude": latitude,
                 "longitude": longitude,
-                "current": "temperature_2m,relative_humidity_2m,weather_code",
+                "current": "temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m",
                 "timezone": "auto"
             }
             res = requests.get(url, params=params, timeout=5.0)
@@ -119,6 +119,7 @@ class WeatherService:
                     "condition": condition,
                     "code": w_code,
                     "humidity": current.get("relative_humidity_2m", 50),
+                    "wind_speed": round(current.get("wind_speed_10m", 0)),
                     "provider": "Open-Meteo"
                 }
         except Exception as e:
@@ -131,8 +132,8 @@ class WeatherService:
             params = {
                 "latitude": latitude,
                 "longitude": longitude,
-                "current": "temperature_2m,relative_humidity_2m,weather_code",
-                "daily": "weather_code,temperature_2m_max,temperature_2m_min",
+                "current": "temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m",
+                "daily": "weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset",
                 "timezone": "auto"
             }
             res = requests.get(url, params=params, timeout=6.0)
@@ -148,6 +149,8 @@ class WeatherService:
                 max_list = daily.get("temperature_2m_max", [])
                 min_list = daily.get("temperature_2m_min", [])
                 codes_list = daily.get("weather_code", [])
+                sunrise_list = daily.get("sunrise", [])
+                sunset_list = daily.get("sunset", [])
 
                 daily_forecast = []
                 day_names = ["Hoje", "Amanhã", "Depois", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
@@ -163,12 +166,18 @@ class WeatherService:
                         "condition": self._map_weather_code(code_val)
                     })
 
+                today_sunrise = sunrise_list[0].split("T")[1] if sunrise_list and "T" in sunrise_list[0] else "06:00"
+                today_sunset = sunset_list[0].split("T")[1] if sunset_list and "T" in sunset_list[0] else "18:00"
+
                 return {
                     "current": {
                         "temp": current_temp,
                         "condition": current_cond,
                         "code": current_code,
                         "humidity": current_data.get("relative_humidity_2m", 50),
+                        "wind_speed": round(current_data.get("wind_speed_10m", 0)),
+                        "sunrise": today_sunrise,
+                        "sunset": today_sunset,
                         "provider": "Open-Meteo"
                     },
                     "daily_forecast": daily_forecast,

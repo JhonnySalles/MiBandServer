@@ -277,22 +277,42 @@ async def send_weather(req: WeatherRequest, session: Session = Depends(get_sessi
     if not dev:
         raise HTTPException(status_code=400, detail="Nenhum dispositivo configurado")
 
-    temp = req.temp
-    condition = req.condition
+    integration = session.exec(select(IntegrationConfig)).first()
+    provider = integration.weather_provider if integration else None
+    token = integration.weather_api_token if integration else None
+    city = integration.weather_city if integration else None
+    lat = integration.latitude if integration else None
+    lon = integration.longitude if integration else None
 
-    if req.auto_fetch or temp is None or condition is None:
-        integration = session.exec(select(IntegrationConfig)).first()
-        w = weather_service.get_current_weather(
-            latitude=integration.latitude if integration else None,
-            longitude=integration.longitude if integration else None,
-            provider=integration.weather_provider if integration else None,
-            api_token=integration.weather_api_token if integration else None,
-            city=integration.weather_city if integration else None
-        )
-        temp = w["temp"]
-        condition = w["condition"]
+    # Obter dados estendidos completos para garantir previsão de vários dias, vento e sol
+    weather_data = weather_service.get_extended_forecast(
+        latitude=lat,
+        longitude=lon,
+        provider=provider,
+        api_token=token,
+        city=city
+    )
+    if weather_data:
+        weather_data["city"] = city or "São Paulo"
 
-    success = await miband_service.send_weather_info(dev.mac_address, temp, condition, dev.auth_key)
+    # Se o usuário especificou temperatura ou condição customizada manualmente no corpo da requisição:
+    if not req.auto_fetch and req.temp is not None:
+        if "current" in weather_data:
+            weather_data["current"]["temp"] = req.temp
+            if req.condition:
+                weather_data["current"]["condition"] = req.condition
+
+    cur = weather_data.get("current", {})
+    temp = cur.get("temp", 24)
+    condition = cur.get("condition", "Ensolarado")
+
+    success = await miband_service.send_weather_info(
+        mac_address=dev.mac_address,
+        temp=temp,
+        condition=condition,
+        auth_key=dev.auth_key,
+        weather_data=weather_data
+    )
     return {"success": success, "sent_to": dev.mac_address, "temp": temp, "condition": condition}
 
 @router.post("/vibrate")

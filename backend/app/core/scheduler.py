@@ -43,20 +43,18 @@ async def execute_sync_workflow(mac_address: str, auth_key: Optional[str] = None
                 api_token=tok,
                 city=city
             )
-            
-            cur = extended_forecast.get("current", {})
-            temp = cur.get("temp", 24)
-            cond = cur.get("condition", "Ensolarado")
-            
-            # Enviar para a Mi Band
-            await miband_service.send_weather_info(mac_address, temp, cond, auth_key)
-            weather_info_str = f" | Clima: {temp}°C ({cond})"
-            logger.info(f"[{source}] Clima enviado com sucesso para {mac_address}")
+            if extended_forecast:
+                extended_forecast["city"] = city or "São Paulo"
+                cur = extended_forecast.get("current", {})
+                temp = cur.get("temp", 24)
+                cond = cur.get("condition", "Ensolarado")
+                weather_info_str = f" | Clima: {temp}°C ({cond})"
+                logger.info(f"[{source}] Dados meteorológicos preparados ({temp}°C, {cond}) para envio durante a sincronização.")
         except Exception as e:
-            logger.warning(f"[{source}] Falha ao processar clima para {mac_address}: {e}")
+            logger.warning(f"[{source}] Falha ao processar previsão do tempo para {mac_address}: {e}")
 
-    # 2. Sincronizar Métricas BLE da Pulseira
-    res = await miband_service.sync_band(mac_address, auth_key)
+    # 2. Sincronizar Métricas BLE da Pulseira (e enviar clima na mesma sessão)
+    res = await miband_service.sync_band(mac_address, auth_key, weather_data=extended_forecast)
     status_code = res.get("status", "ERROR")
     now = get_utc_now()
 
@@ -81,13 +79,25 @@ async def execute_sync_workflow(mac_address: str, auth_key: Optional[str] = None
 
             # Persistir métricas de atividade
             d = res.get("data", {})
+            hr_val = d.get("heart_rate")
+            if hr_val is None:
+                # Fallback para o último BPM registrado caso a pulseira estivesse momentaneamente fora do braço
+                last_act = session.exec(
+                    select(ActivityLog)
+                    .where(ActivityLog.device_mac == mac_address)
+                    .where(ActivityLog.heart_rate != None)
+                    .order_by(ActivityLog.timestamp.desc())
+                ).first()
+                if last_act:
+                    hr_val = last_act.heart_rate
+
             act = ActivityLog(
                 device_mac=mac_address,
                 timestamp=now,
                 steps=d.get("steps", 0),
                 distance_meters=d.get("distance_meters", 0),
                 calories=d.get("calories", 0),
-                heart_rate=d.get("heart_rate"),
+                heart_rate=hr_val,
                 battery_level=d.get("battery_level")
             )
             session.add(act)

@@ -14,6 +14,7 @@ from app.core.logger import logger
 # UUIDs do Protocolo Moderno Huami 2021 (Mi Band 6 / 7 / Amazfit modernas)
 UUID_CHAR_CHUNKED_WRITE = "00000016-0000-3512-2118-0009af100700"
 UUID_CHAR_CHUNKED_READ = "00000017-0000-3512-2118-0009af100700"
+UUID_CHAR_CHUNKED_OLD = "00000020-0000-3512-2118-0009af100700"
 CHUNKED2021_ENDPOINT_AUTH = 130
 CHUNKED2021_ENDPOINT_COMPAT = 0x0090  # 144 - Clima, Configurações e Alarmes
 
@@ -197,11 +198,13 @@ class MiBandProtocol:
                     self._trace("ERROR", f"Erro ao calcular segredo ECDH compartilhado: {e}")
                     return
 
-                # Derivar chave de sessão AES
+                # Derivar chave de sessão AES e sequência criptográfica inicial (InitOperation2021)
                 session_key = bytearray(16)
                 for i in range(16):
                     session_key[i] = shared_secret[i + 8] ^ self.auth_key[i]
                 self.session_key = bytes(session_key)
+                self.encrypted_seq = int.from_bytes(shared_secret[:4], byteorder="little")
+                self._trace("INFO", f"Sequência criptográfica inicial ECDH: {self.encrypted_seq}")
 
                 # Criptografar nonce com AES-CBC (IV nulo)
                 cipher1 = Cipher(algorithms.AES(self.auth_key), modes.CBC(bytes(16)))
@@ -231,6 +234,7 @@ class MiBandProtocol:
             # Aguardar resposta com timeout de 12 segundos
             await asyncio.wait_for(auth_success_event.wait(), timeout=12.0)
             self._is_authenticated = True
+            self.write_handle = handle_counter[0]
             await self.client.stop_notify(UUID_CHAR_CHUNKED_READ)
             return True
 
@@ -371,25 +375,36 @@ class MiBandProtocol:
         return {"steps": 0, "distance_meters": 0, "calories": 0}
 
     async def trigger_vibrate(self, count: int = 1, text: str = "MiBand Server") -> bool:
-        """Dispara vibração física comprovada na Mi Smart Band 6"""
-        # Habilitar notificações de novos alertas no Control Point (0x2A44)
+        """Dispara vibração física comprovada na Mi Smart Band 6 com tela acesa e motor haptico"""
+        # 1. Habilitar notificações de novos alertas no Control Point (0x2A44)
         try:
             await self.client.write_gatt_char(UUID_CHAR_ALERT_CONTROL, bytearray([0x00, 0xFF]), response=True)
         except Exception:
             pass
 
         vibrated = False
+        msg_bytes = text.encode("utf-8", errors="ignore")[:18]
+
         for i in range(max(1, count)):
-            # 1. New Alert (0x2A46) Categoria 3 (Chamada) - vibração física comprovada na tela e pulso
+            # 2. Método Oficial MiBand 6 / Gadgetbridge (CallSpec Incoming)
+            # Envia chamada recebida no chunked endpoint 0, que acende a tela e vibra com prioridade máxima
             try:
-                alert_payload = bytearray([0x03, 0x01]) + text.encode("utf-8", errors="ignore")[:18]
+                call_buf = bytearray([3, 0, 0, 0, 0, 0]) + msg_bytes + bytearray([0, 0, 0, 2])
+                await self._write_old_chunked(0, bytes(call_buf))
+                vibrated = True
+                self._trace("INFO", f"Vibração disparada via CallSpec Incoming ({i + 1}/{count})")
+            except Exception as e_call:
+                self._trace("WARN", f"Aviso ao enviar CallSpec: {e_call}")
+
+            # 3. New Alert (0x2A46) Categoria 3 (Chamada)
+            try:
+                alert_payload = bytearray([0x03, 0x01]) + msg_bytes
                 await self.client.write_gatt_char(UUID_CHAR_NEW_ALERT, alert_payload, response=True)
                 vibrated = True
-                logger.info(f"Vibração disparada com sucesso na Mi Band via New Alert (0x2A46) ({i + 1}/{count})!")
             except Exception as e1:
-                logger.warning(f"Falha ao enviar New Alert: {e1}")
+                self._trace("WARN", f"Falha ao enviar New Alert: {e1}")
 
-            # 2. Fallbacks de alerta simultâneos
+            # 4. Immediate Alert GATT padrão (0x2A06) e Huami Alert (0x0003)
             try:
                 await self.client.write_gatt_char(UUID_CHAR_ALERT, bytearray([0x02]), response=False)
                 await self.client.write_gatt_char(UUID_CHAR_HUAMI_ALERT, bytearray([0x02]), response=False)
@@ -397,8 +412,18 @@ class MiBandProtocol:
             except Exception:
                 pass
 
+            # Deixar vibrar por 1.8 segundos
+            await asyncio.sleep(1.8)
+
+            # 5. Cancelar chamada se foi a última iteração para a tela voltar ao normal
+            try:
+                await self._write_old_chunked(0, bytes([3, 3, 0, 0, 0, 0]))
+            except Exception:
+                pass
+
             if i < count - 1:
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(0.5)
+
         return vibrated
 
     async def sync_time(self, custom_time: Optional[datetime.datetime] = None) -> bool:
@@ -602,7 +627,7 @@ class MiBandProtocol:
             "synced": False
         }
 
-    async def measure_heart_rate(self, timeout: float = 25.0) -> Optional[int]:
+    async def measure_heart_rate(self, timeout: float = 7.0) -> Optional[int]:
         """Aciona o sensor óptico PPG da Mi Band 6 e aguarda a leitura de BPM"""
         hr_value = None
         hr_event = asyncio.Event()
@@ -623,17 +648,23 @@ class MiBandProtocol:
             await self.client.start_notify(UUID_CHAR_HEART_RATE_MEASURE, on_hr_notify)
 
             # Comandos no Control Point (0x2A39)
-            # 1. Parar medição contínua
+            # 1. Configurar monitoramento periódico na pulseira a cada 5 minutos [0x14, 0x05]
+            try:
+                await self.client.write_gatt_char(UUID_CHAR_HEART_RATE_CONTROL, bytearray([0x14, 0x05]), response=True)
+            except Exception:
+                pass
+
+            # 2. Parar medição contínua anterior
             try:
                 await self.client.write_gatt_char(UUID_CHAR_HEART_RATE_CONTROL, bytearray([0x15, 0x01, 0x00]), response=True)
             except Exception:
                 pass
-            # 2. Parar medição manual anterior
+            # 3. Parar medição manual anterior
             try:
                 await self.client.write_gatt_char(UUID_CHAR_HEART_RATE_CONTROL, bytearray([0x15, 0x02, 0x00]), response=True)
             except Exception:
                 pass
-            # 3. Iniciar medição manual
+            # 4. Iniciar medição manual imediata
             self._trace("INFO", "Sensor de batimentos acionado. Mantenha a pulseira no pulso...")
             await self.client.write_gatt_char(UUID_CHAR_HEART_RATE_CONTROL, bytearray([0x15, 0x02, 0x01]), response=True)
 
@@ -698,92 +729,190 @@ class MiBandProtocol:
 
         return alarms_list
 
+    async def _write_old_chunked(self, msg_type: int, data: bytes):
+        """Envia pacotes no endpoint legado 0x0020 (CHUNKED_OLD) para compatibilidade cruzada de firmware"""
+        try:
+            mtu = 23
+            max_c = mtu - 6
+            remaining = len(data)
+            count = 0
+            while remaining > 0:
+                copy_b = min(remaining, max_c)
+                chunk = bytearray(copy_b + 3)
+                flags = 0
+                if remaining <= max_c:
+                    flags |= 0x80
+                    if count == 0:
+                        flags |= 0x40
+                elif count > 0:
+                    flags |= 0x40
+                chunk[0] = 0
+                chunk[1] = (flags | msg_type) & 0xFF
+                chunk[2] = count & 0xFF
+                start_i = count * max_c
+                chunk[3 : 3 + copy_b] = data[start_i : start_i + copy_b]
+                await self.client.write_gatt_char(UUID_CHAR_CHUNKED_OLD, chunk, response=False)
+                await asyncio.sleep(0.04)
+                remaining -= copy_b
+                count += 1
+        except Exception as e:
+            self._trace("WARN", f"Falha no envio legacy chunked 0x0020 (ignorado se não suportado): {e}")
+
     async def send_weather_chunked(self, current_weather: dict, daily_forecast: list, city: str = "São Paulo") -> bool:
-        """Envia pacotes meteorológicos formatados no padrão Huami 2021 (Mi Band 6)"""
+        """Alias para send_weather_full para manter retrocompatibilidade"""
+        return await self.send_weather_full(current_weather, daily_forecast, city)
+
+    async def send_weather_full(self, current_weather: dict, daily_forecast: list, city: Optional[str] = None) -> bool:
+        """Envia suíte completa de 6 pacotes de clima (Huami Gadgetbridge spec) via canais 0x0090 (criptografado) e 0x0020"""
         try:
             now = datetime.datetime.now()
             ts = int(now.timestamp())
             tz_offset_sec = now.astimezone().utcoffset().total_seconds() if now.astimezone().utcoffset() else -10800
             tz_quarters = int(tz_offset_sec / 900)
 
-            # 1. Pacote 2: Clima Atual
+            target_city = city or "São Paulo"
             temp = int(current_weather.get("temp", 24))
             cond_str = str(current_weather.get("condition", "Ensolarado"))
             cond_code = self._map_to_huami_weather_code(current_weather.get("code", 0))
 
-            pkg2 = bytearray([0x00, 0x00, 0xC1, 0x00, 0x02])
-            pkg2.extend(struct.pack("<I", ts))
-            pkg2.append(tz_quarters & 0xFF)
-            pkg2.append(cond_code & 0xFF)
-            pkg2.append(temp & 0xFF)
-            pkg2.extend(cond_str.encode("utf-8") + b"\x00")
+            # 1. Location (ID=8)
+            buf_loc = bytearray([0x08])
+            buf_loc.extend(target_city.encode("utf-8") + b"\x00")
 
-            self._trace("INFO", f"Enviando Clima Atual (Pacote 2): {temp}°C, {cond_str} (código={cond_code})")
-            await self._write_chunked_2021(CHUNKED2021_ENDPOINT_COMPAT, bytes(pkg2), encrypt=False)
-            await asyncio.sleep(0.15)
+            # 2. Current Temp (ID=2)
+            buf_current = bytearray([0x02])
+            buf_current.extend(struct.pack("<I", ts))
+            buf_current.append(tz_quarters & 0xFF)
+            buf_current.append(cond_code & 0xFF)
+            buf_current.append(temp & 0xFF)
+            buf_current.extend(cond_str.encode("utf-8") + b"\x00")
 
-            # 2. Pacote 1: Previsão dos Próximos Dias
-            forecast_items = daily_forecast[:5] if daily_forecast else []
-            nr_days = len(forecast_items) + 1
+            # 3. Air Quality (ID=4)
+            buf_aqi = bytearray([0x04])
+            buf_aqi.extend(struct.pack("<I", ts))
+            buf_aqi.append(tz_quarters & 0xFF)
+            buf_aqi.extend(struct.pack("<h", -1))
+            buf_aqi.extend(b"(n/a)\x00")
 
-            pkg1 = bytearray([0x00, 0x00, 0xC1, 0x00, 0x01])
-            pkg1.extend(struct.pack("<I", ts))
-            pkg1.append(tz_quarters & 0xFF)
-            pkg1.append(nr_days & 0xFF)
+            # 4. Multi-day Forecast (ID=1) - Conforme Gadgetbridge: Hoje + dias subsequentes
+            # Primeiro item DEVE ser o dia de Hoje (Today), seguido de até 4 dias futuros
+            future_days = daily_forecast[1:5] if len(daily_forecast) > 1 else daily_forecast[:4]
+            today_item = daily_forecast[0] if daily_forecast else {}
+            today_max = int(today_item.get("temp_max", temp + 2))
+            today_min = int(today_item.get("temp_min", temp - 3))
+            today_cond = str(today_item.get("condition", cond_str))
+            today_code = self._map_to_huami_weather_code(today_item.get("code", current_weather.get("code", 0)))
 
-            # Dia de Hoje no forecast
-            pkg1.append(cond_code & 0xFF)
-            pkg1.append(cond_code & 0xFF)
-            pkg1.append((temp + 2) & 0xFF)
-            pkg1.append((temp - 3) & 0xFF)
-            pkg1.extend(cond_str.encode("utf-8") + b"\x00")
+            nr_days = 1 + len(future_days)
+            buf_forecast = bytearray([0x01])
+            buf_forecast.extend(struct.pack("<I", ts))
+            buf_forecast.append(tz_quarters & 0xFF)
+            buf_forecast.append(nr_days & 0xFF)
+
+            # Dia de Hoje (sempre presente)
+            buf_forecast.extend([today_code & 0xFF, today_code & 0xFF, today_max & 0xFF, today_min & 0xFF])
+            buf_forecast.extend(today_cond.encode("utf-8") + b"\x00")
 
             # Próximos dias
-            for day in forecast_items:
+            for day in future_days:
                 d_code = self._map_to_huami_weather_code(day.get("code", 0))
                 d_max = int(day.get("temp_max", temp + 2))
                 d_min = int(day.get("temp_min", temp - 3))
-                d_cond = str(day.get("condition", "Ensolarado"))
-                pkg1.append(d_code & 0xFF)
-                pkg1.append(d_code & 0xFF)
-                pkg1.append(d_max & 0xFF)
-                pkg1.append(d_min & 0xFF)
-                pkg1.extend(d_cond.encode("utf-8") + b"\x00")
+                d_cond = str(day.get("condition", cond_str))
+                buf_forecast.extend([d_code & 0xFF, d_code & 0xFF, d_max & 0xFF, d_min & 0xFF])
+                buf_forecast.extend(d_cond.encode("utf-8") + b"\x00")
 
-            self._trace("INFO", f"Enviando Previsão Estendida ({nr_days} dias, criptografado)...")
-            await self._write_chunked_2021(CHUNKED2021_ENDPOINT_COMPAT, bytes(pkg1), encrypt=True)
-            await asyncio.sleep(0.15)
+            # 5. Wind & Humidity (ID=64 / 0x40)
+            wind_speed = current_weather.get("wind_speed", 10)
+            humidity = current_weather.get("humidity", 50)
+            wind_str = f"{wind_speed} km/h".encode("utf-8") + b"\x00"
+            hum_str = f"{humidity}%".encode("utf-8") + b"\x00"
+            buf_wind = bytearray([0x40])
+            buf_wind.extend(struct.pack("<I", ts))
+            buf_wind.append(tz_quarters & 0xFF)
+            buf_wind.extend(wind_str)
+            buf_wind.extend(hum_str)
 
-            # 3. Pacote 8: Localização
-            pkg8 = bytearray([0x00, 0x00, 0xC1, 0x00, 0x08])
-            pkg8.extend(city.encode("utf-8") + b"\x00")
-            self._trace("INFO", f"Enviando Cidade: {city}")
-            await self._write_chunked_2021(CHUNKED2021_ENDPOINT_COMPAT, bytes(pkg8), encrypt=True)
+            # 6. Sunrise & Sunset (ID=16 / 0x10)
+            sunrise_str = current_weather.get("sunrise", "06:00")
+            sunset_str = current_weather.get("sunset", "18:00")
+            try:
+                sun_h, sun_m = [int(x) for x in sunrise_str.split(":")[:2]]
+            except Exception:
+                sun_h, sun_m = 6, 0
+            try:
+                set_h, set_m = [int(x) for x in sunset_str.split(":")[:2]]
+            except Exception:
+                set_h, set_m = 18, 0
 
-            self._trace("INFO", "Previsão do tempo enviada com sucesso à Mi Band!")
+            buf_sun = bytearray([0x10])
+            buf_sun.extend(struct.pack("<I", ts))
+            buf_sun.append(tz_quarters & 0xFF)
+            buf_sun.extend([sun_h & 0xFF, sun_m & 0xFF, set_h & 0xFF, set_m & 0xFF])
+
+            # Garantir sincronização prévia de horário para que o firmware não rejeite o timestamp do clima
+            try:
+                await self.sync_time()
+                await asyncio.sleep(0.3)
+            except Exception:
+                pass
+
+            # Huami Protocol Specification (HuamiSupport.java):
+            # No protocolo Huami 2021 (Mi Smart Band 6), os pacotes de Weather são enviados para CHUNKED2021_ENDPOINT_COMPAT (0x0090).
+            # O cabeçalho é [0x00, 0x00, 0xC1, 0x00] (tipo 1 weather).
+            # No firmware moderno da Mi Band 6, TODOS os pacotes devem ser criptografados (encrypt=True) com a Session Key derivada via ECDH.
+            packets_to_send = [
+                ("Current", buf_current, True),        # ID 2 - Clima atual (Criptografado)
+                ("AirQuality", buf_aqi, True),         # ID 4 - Qualidade do ar (Criptografado)
+                ("Forecast", buf_forecast, True),      # ID 1 - Previsão próximos dias (Criptografado)
+                ("Location", buf_loc, True),           # ID 8 - Cidade (Criptografado)
+                ("WindHumidity", buf_wind, True),      # ID 64 - Vento e umidade (Criptografado)
+                ("SunriseSunset", buf_sun, True)       # ID 16 - Sol nascer/pôr (Criptografado)
+            ]
+
+            if self.session_key:
+                # Dispositivo Moderno Huami 2021 (Mi Smart Band 6) - canal 0x0016 / endpoint 0x0090
+                self._trace("INFO", f"Enviando pacotes de clima no canal 0x0090 (Huami 2021 Chunked)...")
+                for name, raw_buf, should_encrypt in packets_to_send:
+                    cmd = bytearray([0x00, 0x00, 0xC1, 0x00]) + raw_buf
+                    self._trace("TX", f"Canal 0x0090: {name} (tam={len(cmd)}, enc={should_encrypt})")
+                    await self._write_chunked_2021(CHUNKED2021_ENDPOINT_COMPAT, bytes(cmd), encrypt=should_encrypt)
+                    await asyncio.sleep(0.12)
+            else:
+                # Dispositivo Legado (Mi Band 2 / 3 / 4) - canal 0x0020
+                self._trace("INFO", f"Enviando dados meteorológicos no canal legado 0x0020...")
+                for name, raw_buf, _ in packets_to_send:
+                    self._trace("TX", f"Canal 0x0020: {name} (tam={len(raw_buf)})")
+                    await self._write_old_chunked(1, bytes(raw_buf))
+                    await asyncio.sleep(0.08)
+
+            self._trace("INFO", f"Previsão do tempo ({temp}°C, {cond_str}) transmitida com sucesso para a Mi Band!")
             return True
+
         except Exception as e:
-            self._trace("ERROR", f"Falha ao enviar previsão do tempo: {e}")
+            self._trace("ERROR", f"Falha ao enviar previsão do tempo para a Mi Band: {e}")
             return False
 
     def _map_to_huami_weather_code(self, wmo_code: int) -> int:
-        """Mapeia código WMO Open-Meteo para código de ícone Huami Amazfit/MiBand"""
+        """Mapeia código WMO Open-Meteo para os códigos oficiais do Gadgetbridge HuamiWeatherConditions"""
         if wmo_code == 0:
-            return 0  # Ensolarado / Céu limpo
+            return 0   # CLEAR_SKY
         elif wmo_code in [1, 2]:
-            return 1  # Parcialmente nublado
+            return 1   # SCATTERED_CLOUDS (Parcialmente Nublado)
         elif wmo_code == 3:
-            return 2  # Nublado
+            return 2   # CLOUDY (Nublado)
         elif wmo_code in [45, 48]:
-            return 6  # Neblina / Nevoeiro
-        elif wmo_code in [51, 53, 55, 61, 63]:
-            return 3  # Chuva fraca / moderada
+            return 18  # MIST / NEVOEIRO
+        elif wmo_code in [51, 53, 55]:
+            return 7   # LIGHT_RAIN
+        elif wmo_code in [61, 63]:
+            return 8   # MEDIUM_RAIN
         elif wmo_code in [65, 80, 81, 82]:
-            return 4  # Chuva forte / pancadas
+            return 9   # HEAVY_RAIN
         elif wmo_code in [71, 73, 75]:
-            return 5  # Neve
+            return 14  # LIGHT_SNOW
         elif wmo_code in [95, 96, 99]:
-            return 7  # Tempestade / Trovoadas
+            return 4   # THUNDERSTORM
         return 0
 
     async def send_notification(self, category: int = 3, title: str = "MiBand Server", text: str = "Teste") -> bool:

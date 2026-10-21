@@ -43,8 +43,8 @@ class MiBandService:
             finally:
                 self._is_scanning = False
 
-    async def sync_band(self, mac_address: str, auth_key: Optional[str] = None) -> Dict:
-        """Realiza a rotina de conexão, autenticação e extração de dados da Mi Band 6 com lock global e retentativa"""
+    async def sync_band(self, mac_address: str, auth_key: Optional[str] = None, weather_data: Optional[Dict] = None) -> Dict:
+        """Realiza a rotina de conexão, autenticação, leitura de métricas (BPM, passos, bateria) e envio de clima na mesma sessão BLE"""
         if not auth_key:
             return {
                 "status": "ERROR",
@@ -87,12 +87,28 @@ class MiBandService:
                                     logger.info("Lendo métricas da pulseira...")
                                     battery = await protocol.read_battery()
                                     activity = await protocol.read_steps()
-                                    
+
+                                    # Medição de Frequência Cardíaca (BPM)
+                                    logger.info("Iniciando leitura de frequência cardíaca (BPM)...")
+                                    hr_bpm = await protocol.measure_heart_rate(timeout=15.0)
+                                    if hr_bpm:
+                                        logger.info(f"Frequência cardíaca aferida: {hr_bpm} BPM")
+                                    else:
+                                        logger.info("Não foi possível obter BPM no momento (pulseira pode estar fora do braço)")
+
+                                    # Envio de Clima se fornecido
+                                    if weather_data and isinstance(weather_data, dict):
+                                        logger.info("Transmitindo clima estendido para o display da pulseira...")
+                                        cur = weather_data.get("current", {})
+                                        forecast = weather_data.get("daily_forecast", [])
+                                        city = weather_data.get("city", "São Paulo")
+                                        await protocol.send_weather_full(cur, forecast, city)
+
                                     real_data = {
                                         "steps": activity.get("steps", 0),
                                         "distance_meters": activity.get("distance_meters", 0),
                                         "calories": activity.get("calories", 0),
-                                        "heart_rate": None,
+                                        "heart_rate": hr_bpm,
                                         "battery_level": battery
                                     }
                                     return {"status": "SUCCESS", "data": real_data}
@@ -117,10 +133,46 @@ class MiBandService:
         finally:
             self._is_syncing = False
 
-    async def send_weather_info(self, mac_address: str, temp: int, condition: str, auth_key: Optional[str] = None) -> bool:
-        """Envia previsão do tempo / clima para a tela do relógio"""
-        logger.info(f"Enviando dados de clima para {mac_address}: {temp}°C, {condition}")
-        return True
+    async def send_weather_info(
+        self,
+        mac_address: str,
+        temp: Optional[int] = None,
+        condition: Optional[str] = None,
+        auth_key: Optional[str] = None,
+        weather_data: Optional[Dict] = None
+    ) -> bool:
+        """Envia previsão do tempo / clima completa para a tela do relógio via conexão BLE dedicada"""
+        clean_key = auth_key.strip() if auth_key else ""
+        if clean_key.startswith("0x") or clean_key.startswith("0X"):
+            clean_key = clean_key[2:]
+
+        async with self._ble_lock:
+            try:
+                for attempt in range(1, 3):
+                    try:
+                        logger.info(f"Conectando com {mac_address} para envio de clima (tentativa {attempt}/2)...")
+                        async with BleakClient(mac_address, timeout=15.0) as client:
+                            if client.is_connected:
+                                protocol = MiBandProtocol(client, clean_key)
+                                if clean_key:
+                                    auth_ok = await protocol.authenticate()
+                                    if not auth_ok:
+                                        logger.warning("Falha ao autenticar pulseira para envio de clima.")
+                                        return False
+
+                                cur = weather_data.get("current", {}) if weather_data else {}
+                                if not cur and temp is not None:
+                                    cur = {"temp": temp, "condition": condition or "Ensolarado", "code": 0}
+                                forecast = weather_data.get("daily_forecast", []) if weather_data else []
+                                city = weather_data.get("city") if weather_data else None
+
+                                return await protocol.send_weather_full(cur, forecast, city)
+                    except Exception as ble_err:
+                        logger.warning(f"Tentativa {attempt} de envio de clima falhou ({ble_err}).")
+                        await asyncio.sleep(0.5)
+            except Exception as e:
+                logger.error(f"Erro ao enviar dados de clima para {mac_address}: {e}")
+        return False
 
     async def send_vibrate_alert(self, mac_address: str, auth_key: Optional[str] = None) -> bool:
         """Dispara vibração no relógio para localizar ou alertar com proteção de concorrência"""

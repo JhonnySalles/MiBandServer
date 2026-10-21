@@ -67,7 +67,10 @@ if settings.DB_URL.startswith("sqlite"):
     if dir_name:
         os.makedirs(dir_name, exist_ok=True)
 
-engine = create_engine(settings.DB_URL, connect_args={"check_same_thread": False} if "sqlite" in settings.DB_URL else {})
+engine = create_engine(
+    settings.DB_URL,
+    connect_args={"check_same_thread": False, "timeout": 30.0} if "sqlite" in settings.DB_URL else {}
+)
 
 def init_db():
     SQLModel.metadata.create_all(engine)
