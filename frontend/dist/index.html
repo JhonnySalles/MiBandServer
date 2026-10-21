@@ -6,10 +6,10 @@
     <title>MiBand 6 Hub | Raspberry Pi</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <!-- Chart.js via CDN para visualização imediata e sem build prévio -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script type="module" crossorigin src="/assets/index-BkXh71ND.js"></script>
+    <script type="module" crossorigin src="/assets/index-pARBcB7e.js"></script>
     <link rel="stylesheet" crossorigin href="/assets/index-Dx9Gec51.css">
   </head>
   <body>
@@ -148,13 +148,29 @@
               <p>Envie o clima atualizado da internet ou personalize manualmente para a Mi Band 6.</p>
               <form id="form-weather" class="form-row mb-3">
                 <input type="number" id="weather-temp" placeholder="Temperatura °C" value="24" required />
-                <input type="text" id="weather-condition" placeholder="Condição" value="Ensolarado" required />
+                <input type="text" id="weather-condition" list="weather-condition-presets" placeholder="Condição" value="Ensolarado" required />
                 <button type="submit" class="btn btn-secondary">Enviar Manual</button>
               </form>
               <button id="btn-auto-weather" class="btn btn-secondary w-100">
                 <span>🌐</span> Obter Clima da Internet e Enviar
               </button>
             </div>
+
+            <!-- Datalist com condições climáticas reconhecidas pelo firmware da Mi Band 6 -->
+            <datalist id="weather-condition-presets">
+              <option value="Ensolarado">☀️ Ensolarado / Céu Limpo</option>
+              <option value="Parcialmente Nublado">⛅ Parcialmente Nublado</option>
+              <option value="Nublado">☁️ Nublado / Encoberto</option>
+              <option value="Chuva Leve/Moderada">🌧️ Chuva Leve / Moderada</option>
+              <option value="Chuva Leve">🌦️ Chuva Leve / Garoa</option>
+              <option value="Chuva Moderada">🌧️ Chuva Moderada</option>
+              <option value="Pancadas de Chuva">🌧️ Pancadas de Chuva</option>
+              <option value="Tempestade">⛈️ Tempestade / Trovoadas</option>
+              <option value="Nevoeiro">🌫️ Nevoeiro / Neblina</option>
+              <option value="Neve">❄️ Neve</option>
+              <option value="Granizo">🌨️ Granizo</option>
+              <option value="Vento e Chuva">💨 Vento e Chuva</option>
+            </datalist>
 
             <div class="card card-action">
               <h3>⏱️ Próximas Sincronizações</h3>
@@ -599,7 +615,7 @@
                 </div>
                 <div class="form-group">
                   <label>Condição</label>
-                  <input type="text" id="test-weather-today-cond" value="Ensolarado" />
+                  <input type="text" id="test-weather-today-cond" list="weather-condition-presets" value="Ensolarado" />
                 </div>
               </div>
             </div>
@@ -686,7 +702,7 @@
         </section>
       </main>
     </div>
-
+
   </body>
 </html>
 

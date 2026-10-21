@@ -773,7 +773,7 @@ class MiBandProtocol:
             target_city = city or "São Paulo"
             temp = int(current_weather.get("temp", 24))
             cond_str = str(current_weather.get("condition", "Ensolarado"))
-            cond_code = self._map_to_huami_weather_code(current_weather.get("code", 0))
+            cond_code = self._map_to_huami_weather_code(current_weather.get("code"), cond_str)
 
             # 1. Location (ID=8)
             buf_loc = bytearray([0x08])
@@ -801,7 +801,7 @@ class MiBandProtocol:
             today_max = int(today_item.get("temp_max", temp + 2))
             today_min = int(today_item.get("temp_min", temp - 3))
             today_cond = str(today_item.get("condition", cond_str))
-            today_code = self._map_to_huami_weather_code(today_item.get("code", current_weather.get("code", 0)))
+            today_code = self._map_to_huami_weather_code(today_item.get("code", current_weather.get("code")), today_cond)
 
             nr_days = 1 + len(future_days)
             buf_forecast = bytearray([0x01])
@@ -815,10 +815,10 @@ class MiBandProtocol:
 
             # Próximos dias
             for day in future_days:
-                d_code = self._map_to_huami_weather_code(day.get("code", 0))
+                d_cond = str(day.get("condition", cond_str))
+                d_code = self._map_to_huami_weather_code(day.get("code"), d_cond)
                 d_max = int(day.get("temp_max", temp + 2))
                 d_min = int(day.get("temp_min", temp - 3))
-                d_cond = str(day.get("condition", cond_str))
                 buf_forecast.extend([d_code & 0xFF, d_code & 0xFF, d_max & 0xFF, d_min & 0xFF])
                 buf_forecast.extend(d_cond.encode("utf-8") + b"\x00")
 
@@ -893,26 +893,141 @@ class MiBandProtocol:
             self._trace("ERROR", f"Falha ao enviar previsão do tempo para a Mi Band: {e}")
             return False
 
-    def _map_to_huami_weather_code(self, wmo_code: int) -> int:
-        """Mapeia código WMO Open-Meteo para os códigos oficiais do Gadgetbridge HuamiWeatherConditions"""
-        if wmo_code == 0:
-            return 0   # CLEAR_SKY
-        elif wmo_code in [1, 2]:
-            return 1   # SCATTERED_CLOUDS (Parcialmente Nublado)
-        elif wmo_code == 3:
-            return 2   # CLOUDY (Nublado)
-        elif wmo_code in [45, 48]:
-            return 18  # MIST / NEVOEIRO
-        elif wmo_code in [51, 53, 55]:
-            return 7   # LIGHT_RAIN
-        elif wmo_code in [61, 63]:
-            return 8   # MEDIUM_RAIN
-        elif wmo_code in [65, 80, 81, 82]:
-            return 9   # HEAVY_RAIN
-        elif wmo_code in [71, 73, 75]:
-            return 14  # LIGHT_SNOW
-        elif wmo_code in [95, 96, 99]:
-            return 4   # THUNDERSTORM
+    def _map_to_huami_weather_code(self, code_val: Optional[Any] = None, condition_text: Optional[str] = None) -> int:
+        """
+        Motor De/Para universal para códigos e ícones meteorológicos da Mi Smart Band 6 (HuamiWeatherConditions).
+        Faz correspondência por análise semântica de texto (Português/Inglês) e códigos numéricos (WMO, OWM, WeatherAPI).
+        """
+        # 1. Correspondência Semântica por Texto (precedência para evitar código 0 falso quando há descrição clara)
+        if condition_text:
+            txt = condition_text.lower().strip()
+            # Normalizar caracteres acentuados
+            for a, b in [("á", "a"), ("ã", "a"), ("â", "a"), ("é", "e"), ("ê", "e"), ("í", "i"), ("ó", "o"), ("ô", "o"), ("ú", "u"), ("ç", "c")]:
+                txt = txt.replace(a, b)
+
+            # Tempestades e Trovoadas
+            if any(k in txt for k in ["tempestade", "trovoada", "raio", "thunder", "storm", "trovoes"]):
+                return 4  # THUNDERSTORM
+
+            # Granizo
+            if "granizo" in txt or "hail" in txt:
+                return 5  # HAIL
+
+            # Chuva e Neve mesclados
+            if ("chuva" in txt or "rain" in txt) and ("neve" in txt or "snow" in txt):
+                return 6  # RAIN_AND_SNOW
+
+            # Neve
+            if any(k in txt for k in ["neve", "snow", "sleet", "geada"]):
+                if any(k in txt for k in ["fraca", "leve", "light"]):
+                    return 14  # LIGHT_SNOW
+                if any(k in txt for k in ["forte", "pesada", "heavy"]):
+                    return 16  # HEAVY_SNOW
+                return 15  # MEDIUM_SNOW
+
+            # Chuvas e Precipitações
+            if any(k in txt for k in ["chuva", "rain", "garoa", "drizzle", "pancada", "chuvisco", "precipitacao"]):
+                if any(k in txt for k in ["torrencial", "pesada", "forte", "heavy", "intensa"]):
+                    return 9   # HEAVY_RAIN
+                if any(k in txt for k in ["leve", "garoa", "drizzle", "chuvisco", "fraca", "light"]):
+                    return 7   # LIGHT_RAIN
+                if ("sol" in txt or "aberturas" in txt) and "chuva" in txt:
+                    return 3   # RAIN_WITH_SUN
+                return 8       # MEDIUM_RAIN (cobre "Chuva Leve/Moderada", "Chuva", "Chuva Moderada")
+
+            # Nevoeiro / Neblina
+            if any(k in txt for k in ["nevoeiro", "neblina", "fog", "mist", "haze"]):
+                return 18  # MIST
+
+            # Vento e Tempestade de Vento
+            if "vento" in txt or "ventania" in txt or "wind" in txt:
+                return 20  # WIND_AND_RAIN
+
+            # Parcialmente Nublado / Sol com Nuvens
+            if any(k in txt for k in ["parcial", "poucas nuvens", "parcialmente", "partly", "sol com nuvens", "aberturas de sol"]):
+                return 1   # SCATTERED_CLOUDS
+
+            # Nublado / Encoberto
+            if any(k in txt for k in ["nublado", "encoberto", "cloud", "overcast"]):
+                return 2   # CLOUDY
+
+            # Céu Limpo / Ensolarado
+            if any(k in txt for k in ["ensolarado", "limpo", "claro", "sunny", "clear"]):
+                return 0   # CLEAR_SKY
+
+        # 2. Correspondência por Código Numérico
+        try:
+            c = int(code_val) if code_val is not None else 0
+        except (ValueError, TypeError):
+            c = 0
+
+        # Padrão WMO (Open-Meteo)
+        if 0 <= c <= 99:
+            if c == 0:
+                return 0   # CLEAR_SKY
+            elif c in [1, 2]:
+                return 1   # SCATTERED_CLOUDS
+            elif c == 3:
+                return 2   # CLOUDY
+            elif c in [45, 48]:
+                return 18  # MIST
+            elif c in [51, 53, 55]:
+                return 7   # LIGHT_RAIN
+            elif c in [56, 57, 66, 67]:
+                return 6   # RAIN_AND_SNOW
+            elif c in [61, 63]:
+                return 8   # MEDIUM_RAIN
+            elif c in [65, 80, 81, 82]:
+                return 9   # HEAVY_RAIN
+            elif c in [71, 73, 75, 77, 85, 86]:
+                return 15  # MEDIUM_SNOW
+            elif c in [95, 96, 99]:
+                return 4   # THUNDERSTORM
+
+        # Padrão OpenWeatherMap (200 - 804)
+        if 200 <= c <= 899:
+            if 200 <= c <= 232:
+                return 4   # THUNDERSTORM
+            elif 300 <= c <= 321:
+                return 19  # DRIZZLE
+            elif c in [500, 520]:
+                return 7   # LIGHT_RAIN
+            elif c in [501, 511, 521, 531]:
+                return 8   # MEDIUM_RAIN
+            elif c in [502, 503, 504, 522]:
+                return 9   # HEAVY_RAIN
+            elif 600 <= c <= 622:
+                return 15  # MEDIUM_SNOW
+            elif 701 <= c <= 781:
+                return 18  # MIST
+            elif c == 800:
+                return 0   # CLEAR_SKY
+            elif c in [801, 802]:
+                return 1   # SCATTERED_CLOUDS
+            elif c in [803, 804]:
+                return 2   # CLOUDY
+
+        # Padrão WeatherAPI (1000 - 1282)
+        if 1000 <= c <= 1300:
+            if c == 1000:
+                return 0   # CLEAR_SKY
+            elif c == 1003:
+                return 1   # SCATTERED_CLOUDS
+            elif c in [1006, 1009]:
+                return 2   # CLOUDY
+            elif c in [1030, 1135, 1147]:
+                return 18  # MIST
+            elif c in [1063, 1150, 1153, 1180, 1183]:
+                return 7   # LIGHT_RAIN
+            elif c in [1186, 1189, 1240]:
+                return 8   # MEDIUM_RAIN
+            elif c in [1192, 1195, 1243, 1246]:
+                return 9   # HEAVY_RAIN
+            elif c in [1087, 1273, 1276]:
+                return 4   # THUNDERSTORM
+            elif c in [1066, 1114, 1210, 1213, 1216, 1219, 1222, 1225]:
+                return 15  # MEDIUM_SNOW
+
         return 0
 
     async def send_notification(self, category: int = 3, title: str = "MiBand Server", text: str = "Teste") -> bool:

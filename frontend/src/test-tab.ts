@@ -349,6 +349,7 @@ interface DailyForecastItem {
 }
 
 let activeForecastList: DailyForecastItem[] = [];
+let activeCurrentWeather: any = null;
 
 function setupWeatherActions() {
   const btnFetch = document.getElementById('btn-test-weather-fetch') as HTMLButtonElement;
@@ -366,6 +367,7 @@ function setupWeatherActions() {
         
         const cur = data.current || {};
         const daily = data.daily_forecast || [];
+        activeCurrentWeather = cur;
 
         // Atualizar card de Hoje
         const todayTemp = document.getElementById('test-weather-today-temp') as HTMLInputElement;
@@ -394,10 +396,16 @@ function setupWeatherActions() {
       const todayTempEl = document.getElementById('test-weather-today-temp') as HTMLInputElement;
       const todayCondEl = document.getElementById('test-weather-today-cond') as HTMLInputElement;
 
+      const condVal = todayCondEl?.value?.trim() || 'Ensolarado';
+      // Se a condição for a mesma obtida da API, preserva o código. Se foi customizada, envia undefined para acionar motor semântico
+      const curCode = (activeCurrentWeather && activeCurrentWeather.condition === condVal) 
+        ? activeCurrentWeather.code 
+        : undefined;
+
       const currentPayload = {
         temp: parseInt(todayTempEl?.value || '24', 10),
-        condition: todayCondEl?.value || 'Ensolarado',
-        code: 0
+        condition: condVal,
+        code: curCode
       };
 
       // Coletar dados editados dos dias futuros
@@ -409,12 +417,17 @@ function setupWeatherActions() {
         const condInput = card.querySelector('.input-cond') as HTMLInputElement;
         const labelSpan = card.querySelector('.day-badge') as HTMLElement;
 
+        const dayCond = condInput?.value?.trim() || 'Ensolarado';
+        const dayCode = (activeForecastList[idx] && activeForecastList[idx].condition === dayCond)
+          ? activeForecastList[idx].code
+          : undefined;
+
         dailyPayload.push({
           day: labelSpan ? labelSpan.textContent || `Dia ${idx + 1}` : `Dia ${idx + 1}`,
           temp_max: parseInt(maxInput?.value || '26', 10),
           temp_min: parseInt(minInput?.value || '18', 10),
-          condition: condInput?.value || 'Ensolarado',
-          code: activeForecastList[idx]?.code ?? 0
+          condition: dayCond,
+          code: dayCode
         });
       });
 
@@ -454,7 +467,7 @@ function renderForecastEditorCards(dailyList: DailyForecastItem[]) {
       </div>
       <div class="form-group">
         <label>Condição</label>
-        <input type="text" class="input-cond" value="${item.condition || 'Ensolarado'}" />
+        <input type="text" class="input-cond" list="weather-condition-presets" value="${item.condition || 'Ensolarado'}" />
       </div>
     `;
     container.appendChild(card);

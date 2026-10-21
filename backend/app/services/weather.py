@@ -204,9 +204,11 @@ class WeatherService:
                 humidity = data.get("main", {}).get("humidity", 50)
                 weather_list = data.get("weather", [])
                 condition = weather_list[0].get("description", "Céu Limpo").capitalize() if weather_list else "Céu Limpo"
+                code = weather_list[0].get("id", 800) if weather_list else 800
                 return {
                     "temp": temp,
                     "condition": condition,
+                    "code": code,
                     "humidity": humidity,
                     "provider": "OpenWeatherMap"
                 }
@@ -232,22 +234,27 @@ class WeatherService:
                     return None
                 first = items[0]
                 current_temp = round(first.get("main", {}).get("temp", 25))
-                current_cond = first.get("weather", [{}])[0].get("description", "Céu Limpo").capitalize()
+                first_weather = first.get("weather", [{}])[0]
+                current_cond = first_weather.get("description", "Céu Limpo").capitalize()
+                current_code = first_weather.get("id", 800)
                 
                 daily_forecast = []
                 for item in items[::8][:4]:  # Intervalos de 24h aproximados
+                    item_weather = item.get("weather", [{}])[0]
                     daily_forecast.append({
                         "date": item.get("dt_txt", ""),
                         "day": item.get("dt_txt", "").split(" ")[0],
                         "temp_max": round(item.get("main", {}).get("temp_max", current_temp + 2)),
                         "temp_min": round(item.get("main", {}).get("temp_min", current_temp - 3)),
-                        "condition": item.get("weather", [{}])[0].get("description", "Céu Limpo").capitalize()
+                        "condition": item_weather.get("description", "Céu Limpo").capitalize(),
+                        "code": item_weather.get("id", 800)
                     })
 
                 return {
                     "current": {
                         "temp": current_temp,
                         "condition": current_cond,
+                        "code": current_code,
                         "humidity": first.get("main", {}).get("humidity", 50),
                         "provider": "OpenWeatherMap"
                     },
@@ -274,9 +281,11 @@ class WeatherService:
                 temp = round(current.get("temp_c", 25))
                 humidity = current.get("humidity", 50)
                 condition = current.get("condition", {}).get("text", "Céu Limpo")
+                code = current.get("condition", {}).get("code", 1000)
                 return {
                     "temp": temp,
                     "condition": condition,
+                    "code": code,
                     "humidity": humidity,
                     "provider": "WeatherAPI"
                 }
@@ -300,6 +309,7 @@ class WeatherService:
                 current = data.get("current", {})
                 current_temp = round(current.get("temp_c", 25))
                 current_cond = current.get("condition", {}).get("text", "Céu Limpo")
+                current_code = current.get("condition", {}).get("code", 1000)
                 
                 forecast_days = data.get("forecast", {}).get("forecastday", [])
                 daily_forecast = []
@@ -310,13 +320,15 @@ class WeatherService:
                         "day": f.get("date", ""),
                         "temp_max": round(day_info.get("maxtemp_c", current_temp + 2)),
                         "temp_min": round(day_info.get("mintemp_c", current_temp - 3)),
-                        "condition": day_info.get("condition", {}).get("text", "Céu Limpo")
+                        "condition": day_info.get("condition", {}).get("text", "Céu Limpo"),
+                        "code": day_info.get("condition", {}).get("code", 1000)
                     })
 
                 return {
                     "current": {
                         "temp": current_temp,
                         "condition": current_cond,
+                        "code": current_code,
                         "humidity": current.get("humidity", 50),
                         "provider": "WeatherAPI"
                     },

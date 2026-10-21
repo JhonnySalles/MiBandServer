@@ -39,6 +39,7 @@ class SyncRequest(BaseModel):
 class WeatherRequest(BaseModel):
     temp: Optional[int] = None
     condition: Optional[str] = None
+    code: Optional[int] = None
     auto_fetch: Optional[bool] = False
 
 @router.get("/status")
@@ -296,11 +297,17 @@ async def send_weather(req: WeatherRequest, session: Session = Depends(get_sessi
         weather_data["city"] = city or "São Paulo"
 
     # Se o usuário especificou temperatura ou condição customizada manualmente no corpo da requisição:
-    if not req.auto_fetch and req.temp is not None:
+    if not req.auto_fetch:
         if "current" in weather_data:
-            weather_data["current"]["temp"] = req.temp
+            if req.temp is not None:
+                weather_data["current"]["temp"] = req.temp
             if req.condition:
                 weather_data["current"]["condition"] = req.condition
+            if req.code is not None:
+                weather_data["current"]["code"] = req.code
+            elif req.condition:
+                # Remove código antigo do provedor para que o motor semântico deduza o código correto Huami da condição fornecida
+                weather_data["current"]["code"] = None
 
     cur = weather_data.get("current", {})
     temp = cur.get("temp", 24)
