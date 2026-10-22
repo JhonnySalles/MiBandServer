@@ -4,7 +4,7 @@ from typing import List, Optional
 from pydantic import BaseModel
 from datetime import datetime, timezone
 
-from app.core.database import get_session, DeviceConfig, IntegrationConfig, ActivityLog, SyncHistory, SyncSchedule, get_utc_now
+from app.core.database import get_session, DeviceConfig, IntegrationConfig, ActivityLog, SyncHistory, SyncSchedule, WeatherHistory, get_utc_now
 from app.core.cache import cache
 from app.core.scheduler import execute_sync_workflow, reload_scheduler_jobs
 from app.services.miband import miband_service
@@ -254,6 +254,57 @@ async def trigger_manual_sync(req: SyncRequest, session: Session = Depends(get_s
     )
     return result
 
+# --- Cidades e Geolocalização ---
+@router.get("/weather/cities/search")
+def search_cities(
+    query: str,
+    provider: Optional[str] = None,
+    session: Session = Depends(get_session)
+):
+    """Pesquisa cidades no provedor de clima ativo ou Open-Meteo"""
+    integration = session.exec(select(IntegrationConfig)).first()
+    prov = provider or (integration.weather_provider if integration else "open-meteo")
+    token = integration.weather_api_token if integration else None
+    return weather_service.search_cities(query=query, provider=prov, api_token=token)
+
+@router.get("/weather/cities/reverse")
+def reverse_geocode(
+    latitude: float,
+    longitude: float,
+    provider: Optional[str] = None,
+    session: Session = Depends(get_session)
+):
+    """Converte latitude e longitude no nome da cidade e detalhes"""
+    integration = session.exec(select(IntegrationConfig)).first()
+    prov = provider or (integration.weather_provider if integration else "open-meteo")
+    token = integration.weather_api_token if integration else None
+    res = weather_service.reverse_geocode(latitude=latitude, longitude=longitude, provider=prov, api_token=token)
+    if not res:
+        return {
+            "name": "Localização Atual",
+            "region": "",
+            "country": "",
+            "latitude": latitude,
+            "longitude": longitude,
+            "display_name": f"Lat: {latitude:.4f}, Lon: {longitude:.4f}"
+        }
+    return res
+
+@router.get("/weather/cities/detect-ip")
+def detect_location_by_ip():
+    """Detecta a localização do usuário a partir do IP"""
+    res = weather_service.detect_location_by_ip()
+    if not res:
+        return {
+            "name": "São Paulo",
+            "region": "São Paulo",
+            "country": "Brasil",
+            "latitude": -23.5505,
+            "longitude": -46.6333,
+            "display_name": "São Paulo, SP - Brasil"
+        }
+    return res
+
 @router.get("/weather/current")
 def get_current_weather_forecast(session: Session = Depends(get_session)):
     """Consulta a previsão do tempo com suporte aos tokens configurados"""
@@ -264,13 +315,56 @@ def get_current_weather_forecast(session: Session = Depends(get_session)):
     lat = integration.latitude if integration else None
     lon = integration.longitude if integration else None
 
-    return weather_service.get_extended_forecast(
+    forecast = weather_service.get_extended_forecast(
         latitude=lat,
         longitude=lon,
         provider=provider,
         api_token=token,
         city=city
     )
+
+    # Gravar registro de histórico se não houver registro recente nos últimos 15 min
+    if forecast:
+        try:
+            from datetime import timedelta
+            target_city = city or "São Paulo"
+            cutoff = get_utc_now() - timedelta(minutes=15)
+            recent = session.exec(
+                select(WeatherHistory)
+                .where(WeatherHistory.city == target_city)
+                .where(WeatherHistory.timestamp >= cutoff)
+            ).first()
+
+            if not recent:
+                cur = forecast.get("current", {})
+                daily0 = (forecast.get("daily_forecast") or [{}])[0]
+                w_log = WeatherHistory(
+                    timestamp=get_utc_now(),
+                    city=target_city,
+                    temp=int(cur.get("temp", 24)),
+                    temp_min=daily0.get("temp_min"),
+                    temp_max=daily0.get("temp_max"),
+                    condition=str(cur.get("condition", "Ensolarado")),
+                    humidity=cur.get("humidity"),
+                    wind_speed=cur.get("wind_speed"),
+                    weather_code=cur.get("code"),
+                    provider=forecast.get("provider", provider or "Open-Meteo"),
+                    source="PREVIEW"
+                )
+                session.add(w_log)
+                session.commit()
+        except Exception:
+            pass
+
+        forecast["city"] = target_city
+
+    return forecast
+
+@router.get("/weather/history", response_model=List[WeatherHistory])
+def get_weather_history(limit: int = 30, session: Session = Depends(get_session)):
+    """Retorna histórico de leituras meteorológicas capturadas e enviadas à Mi Band"""
+    logs = session.exec(select(WeatherHistory).order_by(WeatherHistory.timestamp.desc()).limit(limit)).all()
+    return logs
 
 @router.post("/weather")
 async def send_weather(req: WeatherRequest, session: Session = Depends(get_session)):
@@ -320,6 +414,28 @@ async def send_weather(req: WeatherRequest, session: Session = Depends(get_sessi
         auth_key=dev.auth_key,
         weather_data=weather_data
     )
+
+    if success and weather_data:
+        try:
+            daily0 = (weather_data.get("daily_forecast") or [{}])[0]
+            w_log = WeatherHistory(
+                timestamp=get_utc_now(),
+                city=weather_data.get("city", city or "São Paulo"),
+                temp=int(temp),
+                temp_min=daily0.get("temp_min"),
+                temp_max=daily0.get("temp_max"),
+                condition=str(condition),
+                humidity=cur.get("humidity"),
+                wind_speed=cur.get("wind_speed"),
+                weather_code=cur.get("code"),
+                provider=weather_data.get("provider", provider or "Open-Meteo"),
+                source="MANUAL" if not req.auto_fetch else "AUTO"
+            )
+            session.add(w_log)
+            session.commit()
+        except Exception:
+            pass
+
     return {"success": success, "sent_to": dev.mac_address, "temp": temp, "condition": condition}
 
 @router.post("/vibrate")

@@ -60,6 +60,42 @@ class SyncHistory(SQLModel, table=True):
     message: Optional[str] = None
     details: Optional[str] = None
 
+class WeatherHistory(SQLModel, table=True):
+    __tablename__ = "weather_history"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    timestamp: datetime = Field(default_factory=get_utc_now, index=True)
+    city: str = Field(index=True)
+    temp: int
+    temp_min: Optional[int] = None
+    temp_max: Optional[int] = None
+    condition: str
+    humidity: Optional[int] = None
+    wind_speed: Optional[int] = None
+    weather_code: Optional[int] = None
+    provider: str = Field(default="Open-Meteo")
+    source: str = Field(default="SYNC")  # "SYNC_AUTO", "SYNC_MANUAL", "PREVIEW"
+    created_at: datetime = Field(default_factory=get_utc_now)
+
+class BandSettings(SQLModel, table=True):
+    __tablename__ = "band_settings"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    device_mac: str = Field(index=True, unique=True)
+    event_reminders: Optional[str] = Field(default="[]")
+    alarms: Optional[str] = Field(default="[]")
+    world_clocks: Optional[str] = Field(default='[{"city": "São Paulo", "timezone": -3}, {"city": "Londres", "timezone": 0}, {"city": "Nova York", "timezone": -4}, {"city": "Tóquio", "timezone": 9}]')
+    lift_wrist_mode: str = Field(default="all_day")  # "off", "all_day", "scheduled"
+    lift_wrist_start: str = Field(default="07:00")
+    lift_wrist_end: str = Field(default="22:00")
+    lift_wrist_speed: str = Field(default="normal")  # "normal", "fast"
+    night_mode: str = Field(default="sunset")  # "off", "sunset", "scheduled"
+    night_mode_start: str = Field(default="22:00")
+    night_mode_end: str = Field(default="07:00")
+    dnd_mode: str = Field(default="smart")  # "off", "always", "smart", "scheduled"
+    wear_location: str = Field(default="left")  # "left", "right"
+    language: str = Field(default="pt_BR")
+    updated_at: datetime = Field(default_factory=get_utc_now)
+
+
 # Garantir pasta do banco SQLite se for sqlite
 if settings.DB_URL.startswith("sqlite"):
     db_path = settings.DB_URL.replace("sqlite:///", "")

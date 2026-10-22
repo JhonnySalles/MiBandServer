@@ -795,8 +795,8 @@ class MiBandProtocol:
             buf_aqi.extend(b"(n/a)\x00")
 
             # 4. Multi-day Forecast (ID=1) - Conforme Gadgetbridge: Hoje + dias subsequentes
-            # Primeiro item DEVE ser o dia de Hoje (Today), seguido de até 4 dias futuros
-            future_days = daily_forecast[1:5] if len(daily_forecast) > 1 else daily_forecast[:4]
+            # Primeiro item DEVE ser o dia de Hoje (Today), seguido de até 6 dias futuros (7 dias no total)
+            future_days = daily_forecast[1:7] if len(daily_forecast) > 1 else daily_forecast[:6]
             today_item = daily_forecast[0] if daily_forecast else {}
             today_max = int(today_item.get("temp_max", temp + 2))
             today_min = int(today_item.get("temp_min", temp - 3))
@@ -1047,3 +1047,134 @@ class MiBandProtocol:
         except Exception as e:
             self._trace("ERROR", f"Falha ao enviar notificação: {e}")
             return False
+
+    # -------------------------------------------------------------
+    # Métodos de Configuração da Pulseira (Huami Band Settings)
+    # -------------------------------------------------------------
+    async def set_wear_location(self, location: str = "left") -> bool:
+        """Configura o braço de uso da pulseira: 'left' (pulso esquerdo) ou 'right' (pulso direito)"""
+        try:
+            val = 0x01 if location.lower() == "right" else 0x00
+            self._trace("INFO", f"Configurando localização da pulseira: {'Pulso Direito' if val == 1 else 'Pulso Esquerdo'}")
+            cmd = bytearray([0x06, 0x02, 0x00, val])
+            ok = await self._write_chunked_2021(CHUNKED2021_ENDPOINT_COMPAT, cmd, encrypt=True)
+            return ok
+        except Exception as e:
+            self._trace("WARN", f"Falha ao configurar braço de uso: {e}")
+            return False
+
+    async def set_lift_wrist(self, mode: str = "all_day", start_time: str = "07:00", end_time: str = "22:00", speed: str = "normal") -> bool:
+        """Configura 'Levantar o pulso para ver informação': mode ('off', 'all_day', 'scheduled'), horários e velocidade"""
+        try:
+            mode_map = {"off": 0x00, "all_day": 0x01, "scheduled": 0x02}
+            mode_val = mode_map.get(mode.lower(), 0x01)
+            
+            s_hr, s_mi = [int(x) for x in start_time.split(":")[:2]] if ":" in start_time else (7, 0)
+            e_hr, e_mi = [int(x) for x in end_time.split(":")[:2]] if ":" in end_time else (22, 0)
+            speed_val = 0x01 if speed.lower() == "fast" else 0x00
+
+            self._trace("INFO", f"Configurando Levantar Pulso: Modo={mode}, {s_hr:02d}:{s_mi:02d} até {e_hr:02d}:{e_mi:02d}, Vel={speed}")
+            cmd = bytearray([0x06, 0x05, mode_val, s_hr, s_mi, e_hr, e_mi, speed_val])
+            ok = await self._write_chunked_2021(CHUNKED2021_ENDPOINT_COMPAT, cmd, encrypt=True)
+            return ok
+        except Exception as e:
+            self._trace("WARN", f"Falha ao configurar levantar o pulso: {e}")
+            return False
+
+    async def set_night_mode(self, mode: str = "sunset", start_time: str = "22:00", end_time: str = "07:00", dnd_mode: str = "smart") -> bool:
+        """Configura Modo Noturno (redução de brilho) e Não Perturbe (DND)"""
+        try:
+            mode_map = {"off": 0x00, "sunset": 0x01, "scheduled": 0x02}
+            mode_val = mode_map.get(mode.lower(), 0x01)
+            s_hr, s_mi = [int(x) for x in start_time.split(":")[:2]] if ":" in start_time else (22, 0)
+            e_hr, e_mi = [int(x) for x in end_time.split(":")[:2]] if ":" in end_time else (7, 0)
+
+            self._trace("INFO", f"Configurando Modo Noturno: Modo={mode}, {s_hr:02d}:{s_mi:02d}-{e_hr:02d}:{e_mi:02d}, DND={dnd_mode}")
+            cmd_night = bytearray([0x06, 0x0a, mode_val, s_hr, s_mi, e_hr, e_mi])
+            await self._write_chunked_2021(CHUNKED2021_ENDPOINT_COMPAT, cmd_night, encrypt=True)
+
+            dnd_map = {"off": 0x00, "always": 0x01, "smart": 0x02, "scheduled": 0x03}
+            dnd_val = dnd_map.get(dnd_mode.lower(), 0x02)
+            cmd_dnd = bytearray([0x06, 0x0b, dnd_val, s_hr, s_mi, e_hr, e_mi])
+            await self._write_chunked_2021(CHUNKED2021_ENDPOINT_COMPAT, cmd_dnd, encrypt=True)
+            return True
+        except Exception as e:
+            self._trace("WARN", f"Falha ao configurar modo noturno/DND: {e}")
+            return False
+
+    async def set_band_language(self, language: str = "pt_BR") -> bool:
+        """Configura o idioma da interface da Mi Band 6"""
+        try:
+            lang_code = language.strip()
+            self._trace("INFO", f"Configurando idioma da pulseira: {lang_code}")
+            cmd = bytearray([0x06, 0x08]) + lang_code.encode("utf-8")[:16]
+            ok = await self._write_chunked_2021(CHUNKED2021_ENDPOINT_COMPAT, cmd, encrypt=True)
+            return ok
+        except Exception as e:
+            self._trace("WARN", f"Falha ao configurar idioma: {e}")
+            return False
+
+    async def set_alarms(self, alarms_list: list) -> bool:
+        """Grava a lista de alarmes nos slots da Mi Band 6"""
+        try:
+            self._trace("INFO", f"Gravando {len(alarms_list)} alarmes na Mi Band...")
+            for i, a in enumerate(alarms_list[:10]):
+                idx = int(a.get("index", i)) & 0x0F
+                enabled = bool(a.get("enabled", True))
+                time_str = a.get("time", "07:00")
+                hr, mi = [int(x) for x in time_str.split(":")[:2]] if ":" in time_str else (7, 0)
+                rep = int(a.get("repetition", 0x7F))
+                state_byte = (idx | (0x80 if enabled else 0x00)) & 0xFF
+                cmd = bytearray([0x02, state_byte, hr, mi, rep])
+                await self._write_chunked_2021(CHUNKED2021_ENDPOINT_COMPAT, cmd, encrypt=True)
+                await asyncio.sleep(0.05)
+            self._trace("INFO", "Alarmes gravados com sucesso na pulseira!")
+            return True
+        except Exception as e:
+            self._trace("WARN", f"Falha ao gravar alarmes: {e}")
+            return False
+
+    async def set_world_clocks(self, clocks_list: list) -> bool:
+        """Envia cidades e fusos horários para o Relógio Mundial da Mi Band"""
+        try:
+            self._trace("INFO", f"Sincronizando {len(clocks_list)} cidades no Relógio Mundial...")
+            payload = bytearray([0x01, 0x11, len(clocks_list) & 0xFF])
+            for c in clocks_list[:10]:
+                city = c.get("city", "São Paulo")
+                tz_offset = int(c.get("timezone", -3))
+                city_bytes = city.encode("utf-8")[:20]
+                payload.append(len(city_bytes))
+                payload.extend(city_bytes)
+                payload.extend(struct.pack("<h", tz_offset))
+            await self._write_chunked_2021(CHUNKED2021_ENDPOINT_COMPAT, payload, encrypt=True)
+            self._trace("INFO", "Relógio Mundial sincronizado com sucesso!")
+            return True
+        except Exception as e:
+            self._trace("WARN", f"Falha ao sincronizar relógio mundial: {e}")
+            return False
+
+    async def set_event_reminders(self, reminders_list: list) -> bool:
+        """Sincroniza a lista de lembretes de eventos com a pulseira"""
+        try:
+            self._trace("INFO", f"Sincronizando {len(reminders_list)} lembretes de evento...")
+            for i, r in enumerate(reminders_list[:15]):
+                title = r.get("title", "Lembrete")[:30]
+                dt_str = r.get("date", "")
+                tm_str = r.get("time", "12:00")
+                yr, mo, dy = [int(x) for x in dt_str.split("-")[:3]] if "-" in dt_str else (2026, 1, 1)
+                hr, mi = [int(x) for x in tm_str.split(":")[:2]] if ":" in tm_str else (12, 0)
+                rep = int(r.get("repetition", 0))
+
+                title_bytes = title.encode("utf-8")[:24]
+                cmd = bytearray([0x01, 0x01, i & 0xFF])
+                cmd.extend(struct.pack("<H", yr))
+                cmd.extend([mo, dy, hr, mi, rep & 0xFF, len(title_bytes)])
+                cmd.extend(title_bytes)
+                await self._write_chunked_2021(CHUNKED2021_ENDPOINT_COMPAT, cmd, encrypt=True)
+                await asyncio.sleep(0.05)
+            self._trace("INFO", "Lembretes de evento sincronizados com sucesso!")
+            return True
+        except Exception as e:
+            self._trace("WARN", f"Falha ao sincronizar lembretes de evento: {e}")
+            return False
+

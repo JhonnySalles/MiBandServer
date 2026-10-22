@@ -1,4 +1,7 @@
+import asyncio
+import json
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlmodel import Session, select
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
@@ -26,6 +29,18 @@ class NotifyRequest(BaseTestRequest):
 class VibrateRequest(BaseTestRequest):
     count: Optional[int] = 2
     text: Optional[str] = "Localizar MiBand"
+
+class StreamTestRequest(BaseModel):
+    action: str  # 'read_all', 'activity', 'battery', 'device_info', 'time_read', 'time_sync', 'alarms', 'heart_rate', 'weather_preview', 'weather_send', 'notify', 'vibrate'
+    mac_address: Optional[str] = None
+    auth_key: Optional[str] = None
+    city: Optional[str] = "São Paulo"
+    current: Optional[Dict[str, Any]] = None
+    daily_forecast: Optional[List[Dict[str, Any]]] = None
+    category: Optional[int] = 3
+    title: Optional[str] = "MiBand Server"
+    text: Optional[str] = "Mensagem de Teste"
+    count: Optional[int] = 2
 
 def _resolve_device_credentials(req: BaseTestRequest, session: Session) -> tuple[str, str]:
     mac = req.mac_address
@@ -68,6 +83,164 @@ def preview_weather(session: Session = Depends(get_session)):
         city=city
     )
 
+@router.post("/stream")
+async def test_stream(req: StreamTestRequest, session: Session = Depends(get_session)):
+    """Executa qualquer ação de teste BLE com streaming em tempo real via Server-Sent Events (SSE)"""
+    event_queue: asyncio.Queue = asyncio.Queue()
+
+    if req.action == "weather_preview":
+        async def run_weather_preview():
+            try:
+                event_queue.put_nowait({"type": "progress", "step": "fetching", "message": "Consultando provedor meteorológico...", "percent": 30})
+                integration = session.exec(select(IntegrationConfig)).first()
+                provider = integration.weather_provider if integration else None
+                token = integration.weather_api_token if integration else None
+                city = req.city or (integration.weather_city if integration else None)
+                lat = integration.latitude if integration else None
+                lon = integration.longitude if integration else None
+
+                event_queue.put_nowait({"type": "progress", "step": "fetching", "message": f"Buscando previsão para {city or 'São Paulo'}...", "percent": 65})
+                forecast = weather_service.get_extended_forecast(
+                    latitude=lat,
+                    longitude=lon,
+                    provider=provider,
+                    api_token=token,
+                    city=city
+                )
+                daily_len = len(forecast.get("daily_forecast", [])) if forecast else 0
+                event_queue.put_nowait({
+                    "type": "complete",
+                    "success": True,
+                    "duration_ms": 120,
+                    "data": forecast,
+                    "error": None,
+                    "logs": [
+                        {"level": "INFO", "msg": f"Previsão consultada: {daily_len} dias carregados.", "ts": "agora"}
+                    ]
+                })
+            except Exception as e:
+                event_queue.put_nowait({
+                    "type": "complete",
+                    "success": False,
+                    "duration_ms": 0,
+                    "data": None,
+                    "error": str(e),
+                    "logs": [
+                        {"level": "ERROR", "msg": f"Erro na previsão: {str(e)}", "ts": "agora"}
+                    ]
+                })
+            finally:
+                event_queue.put_nowait(None)
+
+        asyncio.create_task(run_weather_preview())
+    else:
+        try:
+            mac, key = _resolve_device_credentials(req, session)
+        except Exception as e:
+            event_queue.put_nowait({
+                "type": "complete",
+                "success": False,
+                "duration_ms": 0,
+                "data": None,
+                "error": str(e),
+                "logs": [{"level": "ERROR", "msg": str(e), "ts": "agora"}]
+            })
+            event_queue.put_nowait(None)
+            async def empty_gen():
+                while True:
+                    item = await event_queue.get()
+                    if item is None:
+                        break
+                    yield f"data: {json.dumps(item)}\n\n"
+            return StreamingResponse(empty_gen(), media_type="text/event-stream")
+
+        async def run_ble_test():
+            try:
+                if req.action == "read_all":
+                    await miband_test_service.test_read_all(mac, key, event_queue)
+                elif req.action == "activity":
+                    await miband_test_service.test_read_activity(mac, key, event_queue)
+                elif req.action == "battery":
+                    await miband_test_service.test_read_battery(mac, key, event_queue)
+                elif req.action == "device_info":
+                    await miband_test_service.test_read_device_info(mac, key, event_queue)
+                elif req.action == "time_read":
+                    await miband_test_service.test_read_time(mac, key, event_queue)
+                elif req.action == "time_sync":
+                    await miband_test_service.test_sync_time(mac, key, event_queue)
+                elif req.action == "alarms":
+                    await miband_test_service.test_read_alarms(mac, key, event_queue)
+                elif req.action == "heart_rate":
+                    await miband_test_service.test_read_heart_rate(mac, key, event_queue)
+                elif req.action == "weather_send":
+                    await miband_test_service.test_send_weather(
+                        mac_address=mac,
+                        auth_key=key,
+                        current_weather=req.current or {},
+                        daily_forecast=req.daily_forecast or [],
+                        city=req.city or "São Paulo",
+                        event_queue=event_queue
+                    )
+                elif req.action == "notify":
+                    await miband_test_service.test_send_notification(
+                        mac_address=mac,
+                        auth_key=key,
+                        category=req.category or 3,
+                        title=req.title or "MiBand Server",
+                        text=req.text or "Mensagem de Teste",
+                        event_queue=event_queue
+                    )
+                elif req.action == "vibrate":
+                    await miband_test_service.test_trigger_vibrate(
+                        mac_address=mac,
+                        auth_key=key,
+                        count=req.count or 2,
+                        text=req.text or "Localizar MiBand",
+                        event_queue=event_queue
+                    )
+                else:
+                    event_queue.put_nowait({
+                        "type": "complete",
+                        "success": False,
+                        "duration_ms": 0,
+                        "data": None,
+                        "error": f"Ação desconhecida: {req.action}",
+                        "logs": []
+                    })
+                    event_queue.put_nowait(None)
+            except Exception as ex:
+                event_queue.put_nowait({
+                    "type": "complete",
+                    "success": False,
+                    "duration_ms": 0,
+                    "data": None,
+                    "error": str(ex),
+                    "logs": [{"level": "ERROR", "msg": f"Exceção interna: {str(ex)}", "ts": "agora"}]
+                })
+                event_queue.put_nowait(None)
+
+        asyncio.create_task(run_ble_test())
+
+    async def event_generator():
+        while True:
+            item = await event_queue.get()
+            if item is None:
+                break
+            yield f"data: {json.dumps(item)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+# -------------------------------------------------------------
+# Rotas HTTP Síncronas (Retrocompatibilidade)
+# -------------------------------------------------------------
 @router.post("/read-all")
 async def test_read_all(req: BaseTestRequest, session: Session = Depends(get_session)):
     mac, key = _resolve_device_credentials(req, session)

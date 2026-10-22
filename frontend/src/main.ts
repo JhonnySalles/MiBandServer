@@ -1,4 +1,7 @@
 import { initTestTab } from './test-tab';
+import { initBandSettingsTab, loadBandSettings } from './band-settings-tab';
+import { initCustomSelects, syncCustomSelect } from './custom-select';
+
 
 // Obter a URL base da API a partir de envs injetadas ou inferir pela origem / padrão 8190
 const API_URL = (import.meta as any).env?.VITE_API_URL || 
@@ -160,7 +163,8 @@ function initTabs() {
     dashboard: { title: 'Painel de Métricas', sub: 'Sincronização em tempo real do Raspberry Pi com sua Mi Band' },
     history: { title: 'Histórico de Atividades', sub: 'Registros de sincronizações e leituras anteriores' },
     devices: { title: 'Gerenciador de Dispositivos', sub: 'Pareamento Bluetooth, múltiplos aparelhos e agendamentos' },
-    integrations: { title: 'Integrações & Cache', sub: 'Tokens meteorológicos, cache em memória RAM e proteção do SD' },
+    integrations: { title: 'Previsão do Tempo & Clima', sub: 'Previsão de 7 dias da semana, histórico climático e provedores de meteorologia' },
+    'band-settings': { title: 'Configurações da Pulseira', sub: 'Lembretes, alarmes, relógio mundial, gestos de pulso, modo noturno e idioma da Mi Band 6' },
     test: { title: 'Laboratório de Testes & Diagnóstico', sub: 'Testes isolados de comunicação e envio de dados para a Mi Band' }
   };
 
@@ -197,6 +201,10 @@ function initTabs() {
       if (tabKey === 'integrations') {
         loadIntegrations();
         loadWeatherPreview();
+        loadWeatherHistory();
+      }
+      if (tabKey === 'band-settings') {
+        loadBandSettings();
       }
     });
   });
@@ -213,7 +221,7 @@ function initTabs() {
 }
 
 // Notificações Toast
-function showNotification(msg: string, type: 'success' | 'error' = 'success') {
+function showNotification(msg: string, type: 'success' | 'error' | 'info' = 'success') {
   const notif = document.getElementById('notification');
   if (!notif) return;
   notif.textContent = msg;
@@ -266,6 +274,7 @@ async function loadDashboard() {
     if (batBar && data.battery_level !== null) batBar.style.width = `${data.battery_level}%`;
 
     loadDashboardCharts();
+    loadDashboardWeather();
   } catch (err) {
     console.error('Erro ao buscar métricas:', err);
   }
@@ -421,6 +430,253 @@ async function loadDevicesList() {
   }
 }
 
+// Atualizar exibição visual da cidade selecionada
+function updateSelectedCityDisplay(city: string, lat: number, lon: number, provider?: string) {
+  const nameEl = document.getElementById('selected-city-name');
+  const coordsEl = document.getElementById('selected-city-coords');
+  const badgeEl = document.getElementById('selected-city-provider-badge');
+  const deviceCityLabel = document.getElementById('device-weather-city-label');
+  const searchInput = document.getElementById('city-search-input') as HTMLInputElement;
+  const cityInput = document.getElementById('int-city') as HTMLInputElement;
+  const latInput = document.getElementById('int-lat') as HTMLInputElement;
+  const lonInput = document.getElementById('int-lon') as HTMLInputElement;
+
+  if (nameEl) nameEl.textContent = city;
+  if (coordsEl) coordsEl.textContent = `Latitude: ${Number(lat).toFixed(4)} | Longitude: ${Number(lon).toFixed(4)}`;
+  if (badgeEl && provider) {
+    const provNames: Record<string, string> = {
+      'open-meteo': 'Open-Meteo',
+      'openweathermap': 'OpenWeatherMap',
+      'weatherapi': 'WeatherAPI'
+    };
+    badgeEl.textContent = provNames[provider] || provider;
+  }
+  if (deviceCityLabel) deviceCityLabel.textContent = city;
+
+  if (cityInput) cityInput.value = city;
+  if (latInput) latInput.value = lat.toString();
+  if (lonInput) lonInput.value = lon.toString();
+  if (searchInput && !searchInput.value) searchInput.value = city;
+}
+
+// Inicializar Seletor Inteligente de Cidades & Detecção de Localização
+function initCitySelector() {
+  const searchInput = document.getElementById('city-search-input') as HTMLInputElement;
+  const dropdown = document.getElementById('city-dropdown') as HTMLElement;
+  const spinner = document.getElementById('city-search-spinner');
+  const btnDetect = document.getElementById('btn-detect-location') as HTMLButtonElement;
+  const btnDetectText = document.getElementById('btn-detect-location-text');
+  const providerSelect = document.getElementById('int-provider') as HTMLSelectElement;
+  const btnGotoWeather = document.getElementById('btn-goto-weather-config');
+
+  if (!searchInput || !dropdown) return;
+
+  let searchTimeout: any = null;
+  let currentResults: any[] = [];
+  let focusedIndex = -1;
+
+  // Busca com debounce
+  searchInput.addEventListener('input', () => {
+    const query = searchInput.value.trim();
+    clearTimeout(searchTimeout);
+
+    if (query.length < 2) {
+      dropdown.classList.remove('show');
+      dropdown.innerHTML = '';
+      if (spinner) spinner.classList.remove('active');
+      return;
+    }
+
+    if (spinner) spinner.classList.add('active');
+    searchTimeout = setTimeout(async () => {
+      try {
+        const prov = providerSelect ? providerSelect.value : 'open-meteo';
+        const res = await fetch(`${API_URL}/api/weather/cities/search?query=${encodeURIComponent(query)}&provider=${encodeURIComponent(prov)}`);
+        if (!res.ok) throw new Error('Falha na busca');
+        const results = await res.json();
+        currentResults = results;
+        focusedIndex = -1;
+
+        if (results.length === 0) {
+          dropdown.innerHTML = '<div class="city-dropdown-empty">Nenhuma cidade encontrada com esse nome.</div>';
+          dropdown.classList.add('show');
+        } else {
+          dropdown.innerHTML = results
+            .map((item: any, idx: number) => {
+              const subText = [item.region, item.country].filter(Boolean).join(' - ');
+              return `
+                <div class="city-dropdown-item" data-index="${idx}">
+                  <div class="city-item-main">
+                    <span class="city-item-name">${item.name}</span>
+                    <span class="city-item-sub">${subText}</span>
+                  </div>
+                  <span class="city-item-coords">${Number(item.latitude).toFixed(2)}, ${Number(item.longitude).toFixed(2)}</span>
+                </div>
+              `;
+            })
+            .join('');
+          dropdown.classList.add('show');
+
+          // Eventos de clique nas opções
+          dropdown.querySelectorAll('.city-dropdown-item').forEach((el) => {
+            el.addEventListener('click', () => {
+              const idx = parseInt(el.getAttribute('data-index') || '-1', 10);
+              if (idx >= 0 && currentResults[idx]) {
+                selectCityItem(currentResults[idx]);
+              }
+            });
+          });
+        }
+      } catch (err) {
+        dropdown.innerHTML = '<div class="city-dropdown-empty">Erro ao pesquisar cidades.</div>';
+        dropdown.classList.add('show');
+      } finally {
+        if (spinner) spinner.classList.remove('active');
+      }
+    }, 350);
+  });
+
+  // Navegação por teclado no dropdown
+  searchInput.addEventListener('keydown', (e) => {
+    const items = dropdown.querySelectorAll('.city-dropdown-item');
+    if (!dropdown.classList.contains('show') || items.length === 0) return;
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      focusedIndex = (focusedIndex + 1) % items.length;
+      updateFocusedItem(items);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      focusedIndex = (focusedIndex - 1 + items.length) % items.length;
+      updateFocusedItem(items);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (focusedIndex >= 0 && currentResults[focusedIndex]) {
+        selectCityItem(currentResults[focusedIndex]);
+      }
+    } else if (e.key === 'Escape') {
+      dropdown.classList.remove('show');
+    }
+  });
+
+  function updateFocusedItem(items: NodeListOf<Element>) {
+    items.forEach((item, idx) => {
+      if (idx === focusedIndex) {
+        item.classList.add('focused');
+        item.scrollIntoView({ block: 'nearest' });
+      } else {
+        item.classList.remove('focused');
+      }
+    });
+  }
+
+  function selectCityItem(item: any) {
+    const cityName = item.region ? `${item.name}, ${item.region}` : item.name;
+    const provider = providerSelect ? providerSelect.value : 'open-meteo';
+
+    updateSelectedCityDisplay(cityName, item.latitude, item.longitude, provider);
+    searchInput.value = item.display_name || cityName;
+    dropdown.classList.remove('show');
+
+    showNotification(`Cidade selecionada: ${cityName}`, 'success');
+    loadWeatherPreview();
+  }
+
+  // Fechar dropdown ao clicar fora
+  document.addEventListener('click', (e) => {
+    if (!searchInput.contains(e.target as Node) && !dropdown.contains(e.target as Node)) {
+      dropdown.classList.remove('show');
+    }
+  });
+
+  // Botão de Detecção Automática da Localização (GPS do Navegador + Fallback IP)
+  btnDetect?.addEventListener('click', async () => {
+    if (btnDetect.disabled) return;
+    btnDetect.disabled = true;
+    if (btnDetectText) btnDetectText.textContent = 'Detectando...';
+    showNotification('Obtendo localização do computador...', 'success');
+
+    const handleDetectedData = (data: any) => {
+      const cityName = data.region ? `${data.name}, ${data.region}` : data.name;
+      const provider = providerSelect ? providerSelect.value : 'open-meteo';
+
+      updateSelectedCityDisplay(cityName, data.latitude, data.longitude, provider);
+      searchInput.value = data.display_name || cityName;
+      dropdown.classList.remove('show');
+      showNotification(`📍 Localização detectada: ${cityName} (${data.country})!`, 'success');
+      loadWeatherPreview();
+    };
+
+    const fallbackByIp = async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/weather/cities/detect-ip`);
+        if (!res.ok) throw new Error('Falha detecção IP');
+        const data = await res.json();
+        handleDetectedData(data);
+      } catch (e) {
+        showNotification('Não foi possível detectar a localização automaticamente.', 'error');
+      } finally {
+        btnDetect.disabled = false;
+        if (btnDetectText) btnDetectText.textContent = 'Usar Localização Atual';
+      }
+    };
+
+    if ('geolocation' in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        async (position) => {
+          try {
+            const lat = position.coords.latitude;
+            const lon = position.coords.longitude;
+            const prov = providerSelect ? providerSelect.value : 'open-meteo';
+            const res = await fetch(`${API_URL}/api/weather/cities/reverse?latitude=${lat}&longitude=${lon}&provider=${encodeURIComponent(prov)}`);
+            if (res.ok) {
+              const data = await res.json();
+              handleDetectedData(data);
+            } else {
+              await fallbackByIp();
+            }
+          } catch (e) {
+            await fallbackByIp();
+          } finally {
+            btnDetect.disabled = false;
+            if (btnDetectText) btnDetectText.textContent = 'Usar Localização Atual';
+          }
+        },
+        async (error) => {
+          console.warn('Geolocalização do navegador indisponível ou negada, usando detecção por IP:', error.message);
+          await fallbackByIp();
+        },
+        { timeout: 7000, enableHighAccuracy: true }
+      );
+    } else {
+      await fallbackByIp();
+    }
+  });
+
+  // Atalho da aba de Dispositivos (Pulseira) para ir à aba de Clima e focar o seletor
+  btnGotoWeather?.addEventListener('click', () => {
+    const integrationsBtn = document.querySelector('.nav-item[data-tab="integrations"]') as HTMLButtonElement;
+    integrationsBtn?.click();
+    setTimeout(() => {
+      searchInput?.focus();
+      searchInput?.select();
+    }, 200);
+  });
+
+  // Atualizar badge do provedor caso o usuário mude o select
+  providerSelect?.addEventListener('change', () => {
+    const badgeEl = document.getElementById('selected-city-provider-badge');
+    if (badgeEl) {
+      const provNames: Record<string, string> = {
+        'open-meteo': 'Open-Meteo',
+        'openweathermap': 'OpenWeatherMap',
+        'weatherapi': 'WeatherAPI'
+      };
+      badgeEl.textContent = provNames[providerSelect.value] || providerSelect.value;
+    }
+  });
+}
+
 // Carregar Configuração de Integrações
 async function loadIntegrations() {
   try {
@@ -431,27 +687,136 @@ async function loadIntegrations() {
 
     const provInput = document.getElementById('int-provider') as HTMLSelectElement;
     const tokenInput = document.getElementById('int-token') as HTMLInputElement;
-    const cityInput = document.getElementById('int-city') as HTMLInputElement;
-    const latInput = document.getElementById('int-lat') as HTMLInputElement;
-    const lonInput = document.getElementById('int-lon') as HTMLInputElement;
     const ttlInput = document.getElementById('int-ttl') as HTMLInputElement;
 
-    if (provInput) provInput.value = config.weather_provider || 'open-meteo';
+    if (provInput) {
+      provInput.value = config.weather_provider || 'open-meteo';
+      syncCustomSelect(provInput);
+    }
     if (tokenInput) tokenInput.value = config.weather_api_token || '';
-    if (cityInput) cityInput.value = config.weather_city || 'São Paulo';
-    if (latInput) latInput.value = (config.latitude ?? -23.5505).toString();
-    if (lonInput) lonInput.value = (config.longitude ?? -46.6333).toString();
     if (ttlInput) ttlInput.value = (config.cache_ttl_minutes ?? 30).toString();
+
+    // Atualiza cidade e coordenadas nos campos e elementos visuais
+    updateSelectedCityDisplay(
+      config.weather_city || 'São Paulo',
+      config.latitude ?? -23.5505,
+      config.longitude ?? -46.6333,
+      config.weather_provider || 'open-meteo'
+    );
   } catch (err) {
     console.error('Erro ao carregar integrações:', err);
   }
 }
 
-// Carregar Prévia do Clima Estendido (Forecast)
+// Mapeamento de ícones de clima para exibição visual
+function getWeatherIcon(cond: string = ''): string {
+  const c = cond.toLowerCase();
+  if (c.includes('limpo') || c.includes('sol') || c.includes('ensolarado') || c.includes('clear')) return '☀️';
+  if (c.includes('parcial') || c.includes('poucas')) return '⛅';
+  if (c.includes('nublado') || c.includes('overcast') || c.includes('cloud')) return '☁️';
+  if (c.includes('tempestade') || c.includes('trovo') || c.includes('thunder')) return '⛈️';
+  if (c.includes('neve') || c.includes('snow')) return '❄️';
+  if (c.includes('nevoeiro') || c.includes('fog') || c.includes('névoa')) return '🌫️';
+  if (c.includes('chuva') || c.includes('pancada') || c.includes('rain') || c.includes('drizzle')) return '🌧️';
+  return '🌤️';
+}
+
+interface WeatherLog {
+  id: number;
+  timestamp: string;
+  city: string;
+  temp: number;
+  temp_min?: number;
+  temp_max?: number;
+  condition: string;
+  humidity?: number;
+  wind_speed?: number;
+  weather_code?: number;
+  provider: string;
+  source: string;
+}
+
+// Carregar e Renderizar o Card de Clima do Dashboard (Hoje + Previsão de 7 dias)
+async function loadDashboardWeather() {
+  const iconEl = document.getElementById('dash-weather-icon');
+  const tempEl = document.getElementById('dash-weather-temp');
+  const hlEl = document.getElementById('dash-weather-hl');
+  const condEl = document.getElementById('dash-weather-cond');
+  const cityEl = document.getElementById('dash-weather-city');
+  const humEl = document.getElementById('dash-weather-humidity');
+  const windEl = document.getElementById('dash-weather-wind');
+  const forecastGrid = document.getElementById('dashboard-forecast-days');
+
+  if (!iconEl || !tempEl) return;
+
+  try {
+    const res = await fetch(`${API_URL}/api/weather/current`);
+    if (!res.ok) return;
+    const data = await res.json();
+
+    const cur = data.current || data;
+    const daily = data.daily_forecast || [];
+
+    // Localidade
+    if (cityEl) {
+      const city = data.city || 'Localidade Padrão';
+      cityEl.textContent = `📍 ${city}`;
+    }
+
+    // Clima de Hoje
+    iconEl.textContent = getWeatherIcon(cur.condition);
+    tempEl.textContent = `${cur.temp ?? '--'}`;
+    if (condEl) condEl.textContent = cur.condition || 'Sem dados';
+
+    if (hlEl) {
+      if (daily.length > 0 && daily[0].temp_max !== undefined) {
+        hlEl.textContent = `Máx: ${daily[0].temp_max}° / Mín: ${daily[0].temp_min}°`;
+      } else {
+        hlEl.textContent = `Máx: --° / Mín: --°`;
+      }
+    }
+
+    if (humEl) humEl.textContent = `💧 ${cur.humidity || 50}%`;
+    if (windEl) windEl.textContent = `💨 ${cur.wind_speed || 0} km/h`;
+
+    // Atualizar defaults do formulário manual
+    const inputTemp = document.getElementById('weather-temp') as HTMLInputElement | null;
+    const inputCond = document.getElementById('weather-condition') as HTMLInputElement | null;
+    if (inputTemp && cur.temp !== undefined) inputTemp.value = `${cur.temp}`;
+    if (inputCond && cur.condition) inputCond.value = cur.condition;
+
+    // Mini cards dos 7 dias
+    if (forecastGrid && daily.length > 0) {
+      forecastGrid.innerHTML = daily
+        .map(
+          (f: any) => `
+        <div class="forecast-day-card">
+          <div class="day-label">${f.day || f.date}</div>
+          <div class="day-icon">${getWeatherIcon(f.condition)}</div>
+          <div class="day-temp">
+            <span class="temp-max">${f.temp_max}°</span>
+            <span class="temp-sep">/</span>
+            <span class="temp-min">${f.temp_min}°</span>
+          </div>
+          <div class="day-cond" title="${f.condition}">${f.condition}</div>
+        </div>
+      `
+        )
+        .join('');
+    } else if (forecastGrid) {
+      forecastGrid.innerHTML = '<div class="text-muted text-sm" style="grid-column: 1 / -1; text-align: center; padding: 8px 0;">Nenhuma previsão disponível</div>';
+    }
+  } catch (err) {
+    console.error('Erro ao carregar clima do dashboard:', err);
+    if (condEl) condEl.textContent = 'Erro ao consultar clima';
+  }
+}
+
+// Carregar Prévia do Clima Estendido (Forecast de 7 Dias)
 async function loadWeatherPreview() {
   const container = document.getElementById('weather-preview-content');
   if (!container) return;
-  container.innerHTML = '<p class="text-muted">Consultando meteorologia estendida...</p>';
+  container.innerHTML = '<p class="text-muted">Consultando meteorologia estendida de 7 dias...</p>';
 
   try {
     const res = await fetch(`${API_URL}/api/weather/current`);
@@ -470,8 +835,13 @@ async function loadWeatherPreview() {
               (f: any) => `
             <div class="forecast-day-card">
               <div class="day-label">${f.day || f.date}</div>
-              <div class="day-temp">${f.temp_max}° / ${f.temp_min}°</div>
-              <div class="day-cond">${f.condition}</div>
+              <div class="day-icon">${getWeatherIcon(f.condition)}</div>
+              <div class="day-temp">
+                <span class="temp-max">${f.temp_max}°</span>
+                <span class="temp-sep">/</span>
+                <span class="temp-min">${f.temp_min}°</span>
+              </div>
+              <div class="day-cond" title="${f.condition}">${f.condition}</div>
             </div>
           `
             )
@@ -482,16 +852,53 @@ async function loadWeatherPreview() {
 
     container.innerHTML = `
       <div class="d-flex align-center gap-3">
-        <span style="font-size: 2.2rem;">🌤️</span>
+        <span style="font-size: 2.4rem;">${getWeatherIcon(cur.condition)}</span>
         <div>
-          <div style="font-size: 1.25rem; font-weight: 700;">${cur.temp}°C - ${cur.condition}</div>
-          <div class="text-muted text-sm">Umidade: ${cur.humidity || 50}% | Provedor: <strong>${data.provider || cur.provider || 'Open-Meteo'}</strong></div>
+          <div style="font-size: 1.3rem; font-weight: 700;">${cur.temp}°C - ${cur.condition}</div>
+          <div class="text-muted text-sm">Umidade: ${cur.humidity || 50}% | Vento: ${cur.wind_speed || 0} km/h | Provedor: <strong>${data.provider || cur.provider || 'Open-Meteo'}</strong></div>
         </div>
       </div>
       ${forecastHtml}
     `;
   } catch (err) {
     container.innerHTML = '<p class="text-muted">Não foi possível carregar a previsão estendida do clima.</p>';
+  }
+}
+
+// Carregar Histórico de Clima Gravado dos Dias Anteriores
+async function loadWeatherHistory() {
+  const tbody = document.getElementById('weather-history-table-body');
+  if (!tbody) return;
+
+  try {
+    const res = await fetch(`${API_URL}/api/weather/history?limit=30`);
+    if (!res.ok) return;
+    const list: WeatherLog[] = await res.json();
+
+    if (list.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-3">Nenhum registro de clima gravado ainda. As consultas e sincronizações serão registradas aqui.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = list
+      .map(
+        (log) => `
+        <tr>
+          <td>${new Date(log.timestamp).toLocaleString('pt-BR')}</td>
+          <td><strong>📍 ${log.city}</strong></td>
+          <td><span style="font-weight: 700; color: #f8fafc;">${log.temp}°C</span></td>
+          <td><span class="text-muted text-sm">${log.temp_min !== null && log.temp_min !== undefined ? log.temp_min : '--'}° / ${log.temp_max !== null && log.temp_max !== undefined ? log.temp_max : '--'}°</span></td>
+          <td><span style="margin-right: 4px;">${getWeatherIcon(log.condition)}</span> ${log.condition}</td>
+          <td>${log.humidity !== null && log.humidity !== undefined ? log.humidity + '%' : '--'}</td>
+          <td>${log.wind_speed !== null && log.wind_speed !== undefined ? log.wind_speed + ' km/h' : '--'}</td>
+          <td><span class="badge">${log.provider}</span></td>
+          <td><span class="status-tag ${log.source.toLowerCase().includes('auto') ? 'scheduled' : 'manual'}">${log.source}</span></td>
+        </tr>
+      `
+      )
+      .join('');
+  } catch (err) {
+    tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted">Erro ao carregar histórico do clima.</td></tr>';
   }
 }
 
@@ -776,6 +1183,7 @@ function setupEventListeners() {
       });
       if (res.ok) {
         showNotification('Integrações e tokens salvos com sucesso!', 'success');
+        updateSelectedCityDisplay(city, lat, lon, provider);
         loadWeatherPreview();
       } else {
         showNotification('Erro ao salvar integrações.', 'error');
@@ -785,16 +1193,119 @@ function setupEventListeners() {
     }
   });
 
-  // Atualizar Prévia do Clima
-  document.getElementById('btn-refresh-weather-preview')?.addEventListener('click', () => {
-    loadWeatherPreview();
+  // Consultar Clima: primeiro consulta, atualiza os campos na tela e somente depois tenta sincronizar com a pulseira
+  const btnConsult = (document.getElementById('btn-consult-weather') || document.getElementById('btn-refresh-weather-preview')) as HTMLButtonElement;
+  btnConsult?.addEventListener('click', async () => {
+    if (btnConsult.disabled) return;
+    btnConsult.disabled = true;
+    const originalHtml = btnConsult.innerHTML;
+    btnConsult.innerHTML = '<span class="btn-icon">⏳</span> Consultando clima...';
+    showNotification('Consultando previsão do tempo no serviço meteorológico...', 'success');
+
+    try {
+      // 1. Consulta o clima e atualiza os campos e a prévia de 7 dias
+      await loadWeatherPreview();
+      await loadWeatherHistory();
+
+      // Atualiza também os campos da dashboard/formulário se estiverem no DOM
+      const curData = await fetch(`${API_URL}/api/weather/current`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+      if (curData && curData.current) {
+        const cur = curData.current;
+        const tempInput = document.getElementById('weather-temp') as HTMLInputElement;
+        const condInput = document.getElementById('weather-condition') as HTMLInputElement;
+        if (tempInput) tempInput.value = cur.temp;
+        if (condInput) condInput.value = cur.condition;
+      }
+
+      // 2. Agora tenta sincronizar com a pulseira
+      btnConsult.innerHTML = '<span class="btn-icon">⌚</span> Sincronizando com a pulseira...';
+      showNotification('Previsão obtida! Conectando à Mi Band para sincronizar...', 'success');
+
+      const syncRes = await fetch(`${API_URL}/api/weather`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ auto_fetch: true })
+      });
+      const syncData = await syncRes.json().catch(() => ({}));
+
+      if (syncRes.ok && syncData.success) {
+        showNotification(`🎉 Clima atualizado e sincronizado com a pulseira com sucesso (${syncData.temp}°C, ${syncData.condition})!`, 'success');
+      } else {
+        showNotification(syncData.message || 'Clima consultado e atualizado na tela, mas não foi possível conectar à pulseira via Bluetooth.', 'error');
+      }
+
+      // Atualiza o histórico para refletir o resultado da sincronização
+      loadWeatherHistory();
+
+    } catch (err) {
+      showNotification('Erro ao consultar clima do servidor.', 'error');
+    } finally {
+      btnConsult.disabled = false;
+      btnConsult.innerHTML = originalHtml;
+    }
   });
 
-  // Enviar Clima Manual
+  // Atualizar Histórico do Clima
+  document.getElementById('btn-refresh-weather-history')?.addEventListener('click', () => {
+    loadWeatherHistory();
+    showNotification('Histórico do clima atualizado!', 'success');
+  });
+
+  // Consultar Clima no Dashboard e Sincronizar com a Pulseira
+  document.getElementById('btn-dash-consult-weather')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btn-dash-consult-weather') as HTMLButtonElement | null;
+    const oldHtml = btn ? btn.innerHTML : '';
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<span>⏳</span> Consultando...';
+    }
+
+    try {
+      showNotification('Consultando clima atualizado...', 'info');
+      await loadDashboardWeather();
+
+      showNotification('Sincronizando previsão com a Mi Band 6...', 'info');
+      const res = await fetch(`${API_URL}/api/weather`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ auto_fetch: true })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showNotification(`Clima (${data.temp}°C, ${data.condition}) sincronizado com sucesso na pulseira!`, 'success');
+        loadWeatherHistory();
+      } else {
+        showNotification('Clima consultado na nuvem! (Pulseira não conectada para sincronização imediata)', 'info');
+      }
+    } catch (e) {
+      showNotification('Erro ao sincronizar clima com o servidor.', 'error');
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = oldHtml;
+      }
+    }
+  });
+
+  // Alternar Visibilidade do Envio Manual de Clima
+  document.getElementById('btn-dash-toggle-manual')?.addEventListener('click', () => {
+    const row = document.getElementById('dash-manual-weather-row');
+    if (row) {
+      row.classList.toggle('hidden');
+      if (!row.classList.contains('hidden')) {
+        const inputTemp = document.getElementById('weather-temp') as HTMLInputElement | null;
+        inputTemp?.focus();
+      }
+    }
+  });
+
+  // Enviar Clima Manual (Formulário do Dashboard)
   document.getElementById('form-weather')?.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const temp = parseInt((document.getElementById('weather-temp') as HTMLInputElement).value, 10);
-    const cond = (document.getElementById('weather-condition') as HTMLInputElement).value;
+    const tempInput = document.getElementById('weather-temp') as HTMLInputElement | null;
+    const condInput = document.getElementById('weather-condition') as HTMLInputElement | null;
+    const temp = tempInput ? parseInt(tempInput.value, 10) : 24;
+    const cond = condInput ? condInput.value : 'Ensolarado';
 
     try {
       const res = await fetch(`${API_URL}/api/weather`, {
@@ -803,32 +1314,14 @@ function setupEventListeners() {
         body: JSON.stringify({ temp, condition: cond, auto_fetch: false })
       });
       if (res.ok) {
-        showNotification(`Clima (${temp}°C, ${cond}) enviado para a Mi Band!`, 'success');
+        showNotification(`Clima manual (${temp}°C, ${cond}) enviado para a Mi Band!`, 'success');
+        loadWeatherHistory();
+        loadDashboardWeather();
       } else {
-        showNotification('Erro ao enviar clima.', 'error');
+        showNotification('Erro ao enviar clima manual.', 'error');
       }
     } catch (e) {
       showNotification('Falha ao se comunicar com a API.', 'error');
-    }
-  });
-
-  // Enviar Clima Automático da Internet
-  document.getElementById('btn-auto-weather')?.addEventListener('click', async () => {
-    showNotification('Consultando clima via integrações configuradas e enviando...', 'success');
-    try {
-      const res = await fetch(`${API_URL}/api/weather`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ auto_fetch: true })
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        showNotification(`Clima atualizado: ${data.temp}°C (${data.condition})!`, 'success');
-      } else {
-        showNotification('Falha ao enviar clima automático.', 'error');
-      }
-    } catch (e) {
-      showNotification('Erro de comunicação com o servidor.', 'error');
     }
   });
 }
@@ -837,11 +1330,17 @@ function setupEventListeners() {
 window.addEventListener('DOMContentLoaded', () => {
   initTabs();
   setupEventListeners();
+  initCitySelector();
   renderScheduleBadges();
   checkSystemStatus();
   loadDevicesList();
+  loadIntegrations();
+  loadWeatherHistory();
   loadDashboard();
   initTestTab(API_URL, showNotification);
+  initBandSettingsTab(API_URL, showNotification);
+  initCustomSelects();
 });
+
 
 

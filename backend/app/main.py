@@ -8,6 +8,7 @@ from app.core.cache import cache
 from app.core.scheduler import start_scheduler
 from app.api.routes import router
 from app.api.test_routes import router as test_router
+from app.api.band_settings_routes import router as band_settings_router
 from sqlmodel import Session, select
 
 # Configurar logging centralizado
@@ -72,3 +73,4 @@ app.add_middleware(RequestLoggingMiddleware)
 
 app.include_router(router, prefix="/api")
 app.include_router(test_router, prefix="/api/test")
+app.include_router(band_settings_router, prefix="/api/band")

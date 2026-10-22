@@ -38,7 +38,11 @@
           </button>
           <button class="nav-item" data-tab="integrations">
             <span class="icon">⛅</span>
-            <span>Integrações & Clima</span>
+            <span>Clima</span>
+          </button>
+          <button class="nav-item" data-tab="band-settings">
+            <span class="icon">⚙️</span>
+            <span>Configurações</span>
           </button>
           <button class="nav-item" data-tab="test">
             <span class="icon">🧪</span>
@@ -142,17 +146,73 @@
 
           <!-- Quick Actions and Weather Dispatch -->
           <div class="grid-two-cols">
-            <div class="card card-action">
-              <h3>🌤️ Enviar Previsão do Tempo</h3>
-              <p>Envie o clima atualizado da internet ou personalize manualmente para a Mi Band 6.</p>
-              <form id="form-weather" class="form-row mb-3">
-                <input type="number" id="weather-temp" placeholder="Temperatura °C" value="24" required />
-                <input type="text" id="weather-condition" list="weather-condition-presets" placeholder="Condição" value="Ensolarado" required />
-                <button type="submit" class="btn btn-secondary">Enviar Manual</button>
-              </form>
-              <button id="btn-auto-weather" class="btn btn-secondary w-100">
-                <span>🌐</span> Obter Clima da Internet e Enviar
-              </button>
+            <div class="card card-action dash-weather-card">
+              <div class="dash-weather-header">
+                <h3>🌤️ Clima & Previsão do Tempo</h3>
+                <span class="badge badge-pill dash-weather-city-badge" id="dash-weather-city">📍 Consultando...</span>
+              </div>
+
+              <!-- Top Row: Today (Left) and Actions (Right) -->
+              <div class="dash-weather-hero">
+                <div class="dash-weather-today">
+                  <div class="dash-weather-icon-wrap">
+                    <span id="dash-weather-icon" class="dash-weather-icon">☀️</span>
+                  </div>
+                  <div class="dash-weather-info">
+                    <div class="dash-weather-temp-row">
+                      <span id="dash-weather-temp" class="dash-weather-temp">--</span>
+                      <span class="dash-weather-unit">°C</span>
+                      <span id="dash-weather-hl" class="dash-weather-hl">Máx: --° / Mín: --°</span>
+                    </div>
+                    <div id="dash-weather-cond" class="dash-weather-cond">Carregando clima...</div>
+                    <div class="dash-weather-meta">
+                      <span id="dash-weather-humidity">💧 --%</span>
+                      <span class="meta-sep">•</span>
+                      <span id="dash-weather-wind">💨 -- km/h</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="dash-weather-actions">
+                  <button id="btn-dash-consult-weather" class="btn btn-primary w-100 dash-action-btn" type="button">
+                    <span>🌤️</span> Consultar Clima
+                  </button>
+                  <button id="btn-dash-toggle-manual" class="btn btn-secondary w-100 dash-action-btn" type="button">
+                    <span>✏️</span> Enviar Manual
+                  </button>
+                </div>
+              </div>
+
+              <!-- Collapsible Manual Form Row -->
+              <div id="dash-manual-weather-row" class="dash-manual-row hidden">
+                <form id="form-weather" class="dash-manual-form">
+                  <div class="dash-manual-inputs">
+                    <div class="input-field">
+                      <label for="weather-temp">Temperatura (°C)</label>
+                      <input type="number" id="weather-temp" placeholder="Temp °C" value="24" required />
+                    </div>
+                    <div class="input-field">
+                      <label for="weather-condition">Condição</label>
+                      <input type="text" id="weather-condition" list="weather-condition-presets" placeholder="Condição" value="Ensolarado" required />
+                    </div>
+                    <div class="input-field-btn">
+                      <button type="submit" class="btn btn-secondary btn-send-manual">
+                        <span>📤</span> Enviar para Pulseira
+                      </button>
+                    </div>
+                  </div>
+                </form>
+              </div>
+
+              <!-- Bottom Row: 7-day forecast cards -->
+              <div class="dash-forecast-section">
+                <div class="dash-forecast-title">Previsão dos Próximos 7 Dias</div>
+                <div id="dashboard-forecast-days" class="forecast-days-grid dash-forecast-grid">
+                  <div class="text-muted text-sm" style="grid-column: 1 / -1; text-align: center; padding: 8px 0;">
+                    Carregando previsão de 7 dias...
+                  </div>
+                </div>
+              </div>
             </div>
 
             <!-- Datalist com condições climáticas reconhecidas pelo firmware da Mi Band 6 -->
@@ -295,6 +355,12 @@
                       <input type="checkbox" id="cfg-auto-weather" checked style="width: auto; margin-right: 8px;" />
                       Enviar previsão do tempo
                     </label>
+                    <div id="device-weather-city-box" class="device-weather-info-box mt-2">
+                      <div class="d-flex align-center justify-between">
+                        <span class="text-xs">📍 Cidade: <strong id="device-weather-city-label">São Paulo, SP</strong></span>
+                        <button type="button" class="btn btn-xs btn-secondary" id="btn-goto-weather-config" title="Alterar localidade do clima">Alterar</button>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -331,13 +397,13 @@
           <div class="grid-two-cols">
             <!-- Weather API Settings -->
             <div class="card">
-              <h3>⛅ Configuração da API de Clima</h3>
+              <h3>⛅ Provedor de Clima</h3>
               <p>Configure tokens e fontes de dados de meteorologia para envio automático.</p>
               
               <form id="form-integrations">
                 <div class="form-group">
                   <label for="int-provider">Provedor Meteorológico</label>
-                  <select id="int-provider" class="form-select">
+                  <select id="int-provider" class="form-select modern-select">
                     <option value="open-meteo">Open-Meteo (Gratuito / Sem Token)</option>
                     <option value="openweathermap">OpenWeatherMap (Requer API Key)</option>
                     <option value="weatherapi">WeatherAPI (Requer API Key)</option>
@@ -350,20 +416,65 @@
                   <small class="form-hint">Obrigatório para OpenWeatherMap e WeatherAPI.</small>
                 </div>
 
-                <div class="form-group">
-                  <label for="int-city">Cidade / Localidade de Referência</label>
-                  <input type="text" id="int-city" value="São Paulo" required />
-                </div>
+                <!-- Seletor Inteligente de Cidade e Geolocalização -->
+                <div class="form-group mb-3">
+                  <label for="city-search-input">Cidade / Localidade do Clima</label>
+                  <p class="text-xs text-muted mb-2">Digite o nome da cidade para buscar no provedor ou detecte automaticamente a localização do seu computador:</p>
 
-                <div class="form-row mb-3">
-                  <div>
-                    <label for="int-lat">Latitude</label>
-                    <input type="number" step="any" id="int-lat" value="-23.5505" />
+                  <div class="city-search-container">
+                    <div class="city-search-wrapper">
+                      <div class="city-input-group">
+                        <span class="city-input-icon">🔍</span>
+                        <input 
+                          type="text" 
+                          id="city-search-input" 
+                          class="city-search-input" 
+                          placeholder="Pesquise por cidade (ex: Campinas, Lisboa, Tóquio)..." 
+                          autocomplete="off" 
+                        />
+                        <div class="city-search-spinner" id="city-search-spinner"></div>
+                      </div>
+                      <button type="button" id="btn-detect-location" class="btn-detect-location" title="Descobre a cidade atual do seu computador via GPS ou IP">
+                        <span>📍</span> <span id="btn-detect-location-text">Usar Localização Atual</span>
+                      </button>
+                    </div>
+
+                    <!-- Dropdown de Sugestões de Cidades -->
+                    <div id="city-dropdown" class="city-dropdown"></div>
                   </div>
-                  <div>
-                    <label for="int-lon">Longitude</label>
-                    <input type="number" step="any" id="int-lon" value="-46.6333" />
+
+                  <!-- Card Visual da Cidade Atualmente Selecionada -->
+                  <div id="selected-city-card" class="selected-city-card">
+                    <div class="selected-city-info">
+                      <span class="selected-city-icon">📍</span>
+                      <div>
+                        <div class="selected-city-title" id="selected-city-name">São Paulo, SP - Brasil</div>
+                        <div class="selected-city-coords" id="selected-city-coords">Latitude: -23.5505 | Longitude: -46.6333</div>
+                      </div>
+                    </div>
+                    <span class="badge" id="selected-city-provider-badge">Open-Meteo</span>
                   </div>
+
+                  <!-- Inputs ocultos / ajustáveis para compatibilidade -->
+                  <input type="hidden" id="int-city" value="São Paulo" />
+
+                  <!-- Seção Expansível para Ajuste Manual de Coordenadas -->
+                  <details class="coords-accordion">
+                    <summary>⚙️ Ajuste manual de Latitude e Longitude (Avançado)</summary>
+                    <div class="coords-accordion-content">
+                      <div class="form-row">
+                        <div>
+                          <label for="int-lat">Latitude</label>
+                          <input type="number" step="any" id="int-lat" value="-23.5505" />
+                        </div>
+                        <div>
+                          <label for="int-lon">Longitude</label>
+                          <input type="number" step="any" id="int-lon" value="-46.6333" />
+                        </div>
+                      </div>
+                      <small class="form-hint">Ao selecionar uma cidade na busca acima, estes campos são atualizados automaticamente.</small>
+                    </div>
+                  </details>
                 </div>
 
                 <div class="form-group">
@@ -396,9 +507,394 @@
                 <div id="weather-preview-content" class="mt-2">
                   <p>Carregando clima atual...</p>
                 </div>
-                <button id="btn-refresh-weather-preview" class="btn btn-secondary mt-3 w-100">
-                  🔄 Testar Conexão / Atualizar Prévia
+                <button type="button" id="btn-consult-weather" class="btn btn-primary mt-3 w-100">
+                  <span class="btn-icon">🌤️</span> Consultar Clima
                 </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Grid de Histórico de Clima -->
+          <div class="card weather-history-section mt-5">
+            <div class="d-flex justify-between align-center mb-3 flex-wrap gap-2">
+              <div>
+                <h3>📜 Histórico de Clima Obtido</h3>
+                <p class="text-sm text-muted">Registro das consultas meteorológicas capturadas e enviadas à Mi Smart Band 6.</p>
+              </div>
+              <button type="button" id="btn-refresh-weather-history" class="btn btn-secondary btn-sm">
+                <span>🔄</span> Atualizar Histórico
+              </button>
+            </div>
+
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Data / Hora</th>
+                    <th>Cidade</th>
+                    <th>Temperatura</th>
+                    <th>Mín / Máx</th>
+                    <th>Condição</th>
+                    <th>Umidade</th>
+                    <th>Vento</th>
+                    <th>Provedor</th>
+                    <th>Origem</th>
+                  </tr>
+                </thead>
+                <tbody id="weather-history-table-body">
+                  <tr>
+                    <td colspan="9" class="text-center text-muted">Carregando histórico do clima...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- TAB: CONFIGURAÇÕES DA PULSEIRA -->
+        <section id="tab-band-settings" class="tab-content">
+          <!-- Top Bar de Ações e Status -->
+          <div class="test-top-bar card mb-4">
+            <div class="d-flex justify-between align-center flex-wrap gap-3">
+              <div>
+                <div class="d-flex align-center gap-2">
+                  <h3>⚙️ Configurações da Mi Smart Band 6</h3>
+                  <span class="badge badge-test-mode" id="band-settings-device-badge">Pulseira Conectada</span>
+                </div>
+                <p class="text-sm text-muted mt-1">
+                  Gerencie lembretes de eventos, alarmes, relógio mundial, gestos ao levantar o pulso, modo noturno, idioma e orientação de uso.
+                </p>
+              </div>
+              <div class="d-flex align-center gap-3 flex-wrap">
+                <span id="progress-band-settings-global" class="test-progress-inline"></span>
+                <button id="btn-band-read" class="btn btn-secondary">
+                  <span>🔄</span> Ler Alarmes da Pulseira
+                </button>
+                <button id="btn-band-save-sync" class="btn btn-primary">
+                  <span>💾</span> Salvar & Sincronizar Tudo
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Card 1: Lembretes de Eventos -->
+          <div class="card mb-4" id="card-band-reminders">
+            <div class="card-header d-flex justify-between align-center flex-wrap gap-2">
+              <div class="d-flex align-center gap-2">
+                <span class="fs-4">📅</span>
+                <h3 class="m-0">Lembretes de Eventos</h3>
+                <span class="badge" id="badge-reminders-count">0 lembretes</span>
+              </div>
+              <div class="d-flex align-center gap-2">
+                <span id="progress-sync-reminders" class="test-progress-inline"></span>
+                <button id="btn-sync-reminders" class="btn btn-secondary btn-sm">
+                  <span>⚡</span> Sincronizar Lembretes
+                </button>
+              </div>
+            </div>
+            <div class="card-body">
+              <p class="text-sm text-muted mb-3">
+                Adicione compromissos e lembretes que a pulseira exibirá na tela acompanhados de vibração na data e hora definidas.
+              </p>
+              <div class="band-form-row mb-3">
+                <div class="form-group flex-1">
+                  <label for="input-reminder-title">Título do Evento / Lembrete</label>
+                  <input type="text" id="input-reminder-title" class="form-control" placeholder="Ex: Reunião de equipe ou Tomar remédio" maxlength="40">
+                </div>
+                <div class="form-group">
+                  <label for="input-reminder-datetime">Data e Hora</label>
+                  <input type="datetime-local" id="input-reminder-datetime" class="form-control">
+                </div>
+                <div class="form-group align-self-end">
+                  <button type="button" id="btn-add-reminder" class="btn btn-primary">
+                    <span>➕</span> Adicionar
+                  </button>
+                </div>
+              </div>
+              <div id="band-reminders-list" class="band-items-container">
+                <div class="band-empty-state">Nenhum lembrete cadastrado. Adicione um acima.</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Card 2: Alarmes da Pulseira -->
+          <div class="card mb-4" id="card-band-alarms">
+            <div class="card-header d-flex justify-between align-center flex-wrap gap-2">
+              <div class="d-flex align-center gap-2">
+                <span class="fs-4">⏰</span>
+                <h3 class="m-0">Alarmes da Pulseira</h3>
+                <span class="badge" id="badge-alarms-count">0 alarmes</span>
+              </div>
+              <div class="d-flex align-center gap-2">
+                <span id="progress-sync-alarms" class="test-progress-inline"></span>
+                <button id="btn-sync-alarms" class="btn btn-secondary btn-sm">
+                  <span>⚡</span> Sincronizar Alarmes
+                </button>
+              </div>
+            </div>
+            <div class="card-body">
+              <p class="text-sm text-muted mb-3">
+                Configure até 10 alarmes que vibram suavemente no pulso para acordar ou sinalizar tarefas.
+              </p>
+              <div class="band-form-row mb-3">
+                <div class="form-group">
+                  <label for="input-alarm-time">Horário</label>
+                  <input type="time" id="input-alarm-time" class="form-control" value="07:00">
+                </div>
+                <div class="form-group flex-1">
+                  <label>Repetição por Dias da Semana</label>
+                  <div class="alarm-days-picker" id="alarm-days-group">
+                    <button type="button" class="day-pill" data-day="0" title="Domingo">Dom</button>
+                    <button type="button" class="day-pill" data-day="1" title="Segunda-feira">Seg</button>
+                    <button type="button" class="day-pill" data-day="2" title="Terça-feira">Ter</button>
+                    <button type="button" class="day-pill" data-day="3" title="Quarta-feira">Qua</button>
+                    <button type="button" class="day-pill" data-day="4" title="Quinta-feira">Qui</button>
+                    <button type="button" class="day-pill" data-day="5" title="Sexta-feira">Sex</button>
+                    <button type="button" class="day-pill" data-day="6" title="Sábado">Sáb</button>
+                  </div>
+                </div>
+                <div class="form-group d-flex align-center gap-2 pt-4">
+                  <label class="switch-wrap">
+                    <input type="checkbox" id="input-alarm-snooze" checked>
+                    <span class="slider round"></span>
+                  </label>
+                  <span class="text-sm">Modo Soneca</span>
+                </div>
+                <div class="form-group align-self-end">
+                  <button type="button" id="btn-add-alarm" class="btn btn-primary">
+                    <span>➕</span> Adicionar Alarme
+                  </button>
+                </div>
+              </div>
+              <div id="band-alarms-list" class="band-items-container">
+                <div class="band-empty-state">Nenhum alarme configurado. Adicione um acima ou clique em "Ler Alarmes da Pulseira".</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Card 3: Relógio Mundial -->
+          <div class="card mb-4" id="card-band-world-clocks">
+            <div class="card-header d-flex justify-between align-center flex-wrap gap-2">
+              <div class="d-flex align-center gap-2">
+                <span class="fs-4">🌍</span>
+                <h3 class="m-0">Relógio Mundial</h3>
+                <span class="badge" id="badge-world-clocks-count">0 cidades</span>
+              </div>
+              <div class="d-flex align-center gap-2">
+                <span id="progress-sync-world-clocks" class="test-progress-inline"></span>
+                <button id="btn-sync-world-clocks" class="btn btn-secondary btn-sm">
+                  <span>⚡</span> Sincronizar Relógios
+                </button>
+              </div>
+            </div>
+            <div class="card-body">
+              <p class="text-sm text-muted mb-3">
+                Visualize horários internacionais diretamente na tela do aplicativo de Relógio Mundial da Mi Band 6.
+              </p>
+              <div class="band-form-row mb-3">
+                <div class="form-group flex-1">
+                  <label for="input-world-city-name">Nome da Cidade / Região</label>
+                  <input type="text" id="input-world-city-name" class="form-control" placeholder="Ex: Tóquio, Londres, Nova York" maxlength="25">
+                </div>
+                <div class="form-group">
+                  <label for="select-world-city-offset">Fuso Horário (UTC)</label>
+                  <select id="select-world-city-offset" class="form-select modern-select">
+                    <option value="-5">UTC-5 (Nova York, Miami)</option>
+                    <option value="-4">UTC-4 (Manaus, Santiago)</option>
+                    <option value="-3" selected>UTC-3 (Brasília, São Paulo)</option>
+                    <option value="-2">UTC-2 (Fernando de Noronha)</option>
+                    <option value="-1">UTC-1 (Cabo Verde, Açores)</option>
+                    <option value="0">UTC+0 (Londres, Lisboa, UTC)</option>
+                    <option value="1">UTC+1 (Paris, Berlim, Roma, Madrid)</option>
+                    <option value="2">UTC+2 (Cairo, Atenas, Helsinque)</option>
+                    <option value="3">UTC+3 (Moscou, Istambul, Dubai)</option>
+                    <option value="5.5">UTC+5:30 (Índia - Nova Délhi)</option>
+                    <option value="8">UTC+8 (Pequim, Cingapura, Hong Kong)</option>
+                    <option value="9">UTC+9 (Tóquio, Seul)</option>
+                    <option value="10">UTC+10 (Sydney, Melbourne)</option>
+                    <option value="12">UTC+12 (Auckland, Fiji)</option>
+                  </select>
+                </div>
+                <div class="form-group align-self-end">
+                  <button type="button" id="btn-add-world-clock" class="btn btn-primary">
+                    <span>➕</span> Adicionar Cidade
+                  </button>
+                </div>
+              </div>
+              <div id="band-world-clocks-list" class="band-grid-items">
+                <!-- Cidades renderizadas aqui -->
+              </div>
+            </div>
+          </div>
+
+          <!-- Grid de Ajustes do Sistema (Cards 4 a 7) -->
+          <div class="band-settings-grid mb-4">
+            <!-- Card 4: Levantar o Pulso -->
+            <div class="card" id="card-lift-wrist">
+              <div class="card-header d-flex justify-between align-center flex-wrap gap-2">
+                <div class="d-flex align-center gap-2">
+                  <span class="fs-4">⌚</span>
+                  <h3 class="m-0">Levantar o Pulso</h3>
+                </div>
+                <div class="d-flex align-center gap-2">
+                  <span id="progress-lift-wrist" class="test-progress-inline"></span>
+                  <button id="btn-apply-lift-wrist" class="btn btn-secondary btn-sm">
+                    <span>⚡</span> Aplicar
+                  </button>
+                </div>
+              </div>
+              <div class="card-body">
+                <p class="text-sm text-muted mb-3">
+                  Ativa a tela automaticamente ao girar o pulso em direção ao seu rosto.
+                </p>
+                <div class="form-group mb-3">
+                  <label class="form-label-bold">Modo de Operação</label>
+                  <div class="segmented-control" id="lift-wrist-mode-group">
+                    <button type="button" class="segment-btn active" data-mode="all_day">O Dia Todo</button>
+                    <button type="button" class="segment-btn" data-mode="scheduled">Programado</button>
+                    <button type="button" class="segment-btn" data-mode="off">Desativado</button>
+                  </div>
+                </div>
+
+                <div id="lift-wrist-schedule-wrap" class="schedule-inputs-row mb-3" style="display: none;">
+                  <div class="form-group flex-1">
+                    <label for="input-lift-wrist-start" class="text-xs">Horário Início</label>
+                    <input type="time" id="input-lift-wrist-start" class="form-control" value="07:00">
+                  </div>
+                  <div class="form-group flex-1">
+                    <label for="input-lift-wrist-end" class="text-xs">Horário Término</label>
+                    <input type="time" id="input-lift-wrist-end" class="form-control" value="22:00">
+                  </div>
+                </div>
+
+                <div class="form-group">
+                  <label for="select-lift-wrist-speed" class="form-label-bold">Velocidade de Resposta</label>
+                  <select id="select-lift-wrist-speed" class="form-select modern-select">
+                    <option value="normal" selected>Padrão (Econômico)</option>
+                    <option value="fast">Rápido (Sensibilidade Alta)</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <!-- Card 5: Modo Noturno & Não Perturbe -->
+            <div class="card" id="card-night-mode">
+              <div class="card-header d-flex justify-between align-center flex-wrap gap-2">
+                <div class="d-flex align-center gap-2">
+                  <span class="fs-4">🌙</span>
+                  <h3 class="m-0">Modo Noturno & DND</h3>
+                </div>
+                <div class="d-flex align-center gap-2">
+                  <span id="progress-night-mode" class="test-progress-inline"></span>
+                  <button id="btn-apply-night-mode" class="btn btn-secondary btn-sm">
+                    <span>⚡</span> Aplicar
+                  </button>
+                </div>
+              </div>
+              <div class="card-body">
+                <p class="text-sm text-muted mb-3">
+                  Reduz o brilho da tela e silencia notificações para conforto durante a noite e sono.
+                </p>
+                <div class="form-group mb-3">
+                  <label for="select-night-mode" class="form-label-bold">Brilho Noturno Reduzido</label>
+                  <select id="select-night-mode" class="form-select modern-select">
+                    <option value="sunset" selected>Ao Pôr do Sol (Automático)</option>
+                    <option value="scheduled">Horário Programado</option>
+                    <option value="off">Desativado</option>
+                  </select>
+                </div>
+
+                <div id="night-mode-schedule-wrap" class="schedule-inputs-row mb-3" style="display: none;">
+                  <div class="form-group flex-1">
+                    <label for="input-night-mode-start" class="text-xs">Início Noturno</label>
+                    <input type="time" id="input-night-mode-start" class="form-control" value="22:00">
+                  </div>
+                  <div class="form-group flex-1">
+                    <label for="input-night-mode-end" class="text-xs">Término Noturno</label>
+                    <input type="time" id="input-night-mode-end" class="form-control" value="07:00">
+                  </div>
+                </div>
+
+                <div class="form-group">
+                  <label for="select-dnd-mode" class="form-label-bold">Não Perturbe (DND)</label>
+                  <select id="select-dnd-mode" class="form-select modern-select">
+                    <option value="smart" selected>Inteligente (Ativa ao detectar sono)</option>
+                    <option value="all_day">Sempre Ativado</option>
+                    <option value="scheduled">Programado no Período Noturno</option>
+                    <option value="off">Desativado</option>
+                  </select>
+                  <small class="text-muted mt-1 d-block">No modo Inteligente, as notificações silenciam enquanto você dorme.</small>
+                </div>
+              </div>
+            </div>
+
+            <!-- Card 6: Localização da Pulseira -->
+            <div class="card" id="card-wear-location">
+              <div class="card-header d-flex justify-between align-center flex-wrap gap-2">
+                <div class="d-flex align-center gap-2">
+                  <span class="fs-4">🦾</span>
+                  <h3 class="m-0">Localização da Pulseira</h3>
+                </div>
+                <div class="d-flex align-center gap-2">
+                  <span id="progress-wear-location" class="test-progress-inline"></span>
+                  <button id="btn-apply-wear-location" class="btn btn-secondary btn-sm">
+                    <span>⚡</span> Aplicar
+                  </button>
+                </div>
+              </div>
+              <div class="card-body">
+                <p class="text-sm text-muted mb-3">
+                  Selecione em qual pulso você utiliza a pulseira. Isso calibra o algoritmo de contagem de passos e reconhecimento de gestos.
+                </p>
+                <input type="hidden" id="input-wear-location" value="left">
+                <div class="wrist-picker-grid">
+                  <button type="button" class="wrist-card active" id="wrist-opt-left" data-wrist="left">
+                    <span class="wrist-icon">👈</span>
+                    <span class="wrist-label">Pulso Esquerdo</span>
+                  </button>
+                  <button type="button" class="wrist-card" id="wrist-opt-right" data-wrist="right">
+                    <span class="wrist-icon">👉</span>
+                    <span class="wrist-label">Pulso Direito</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Card 7: Idioma da Pulseira -->
+            <div class="card" id="card-band-language">
+              <div class="card-header d-flex justify-between align-center flex-wrap gap-2">
+                <div class="d-flex align-center gap-2">
+                  <span class="fs-4">🌐</span>
+                  <h3 class="m-0">Idioma da Pulseira</h3>
+                </div>
+                <div class="d-flex align-center gap-2">
+                  <span id="progress-band-language" class="test-progress-inline"></span>
+                  <button id="btn-apply-language" class="btn btn-secondary btn-sm">
+                    <span>⚡</span> Aplicar
+                  </button>
+                </div>
+              </div>
+              <div class="card-body">
+                <p class="text-sm text-muted mb-3">
+                  Escolha o idioma do sistema operacional, menus e textos da sua Mi Smart Band 6.
+                </p>
+                <div class="form-group mb-3">
+                  <label for="select-band-language" class="form-label-bold">Idioma Selecionado</label>
+                  <select id="select-band-language" class="form-select modern-select">
+                    <option value="pt_BR" selected>🇧🇷 Português (Brasil)</option>
+                    <option value="en_US">🇺🇸 English (Estados Unidos)</option>
+                    <option value="es_ES">🇪🇸 Español (Espanha)</option>
+                    <option value="fr_FR">🇫🇷 Français (França)</option>
+                    <option value="de_DE">🇩🇪 Deutsch (Alemanha)</option>
+                    <option value="it_IT">🇮🇹 Italiano (Itália)</option>
+                    <option value="ru_RU">🇷🇺 Русский (Rússia)</option>
+                    <option value="zh_CN">🇨🇳 简体中文 (Chinês Simplificado)</option>
+                  </select>
+                </div>
+                <div class="alert-tip-box">
+                  <span class="alert-icon">💡</span>
+                  <span class="text-xs text-muted">Após aplicar, a Mi Band 6 atualizará todos os menus e ícones instantaneamente para o idioma escolhido.</span>
+                </div>
               </div>
             </div>
           </div>
@@ -417,7 +913,8 @@
                   Execute leituras e testes individuais diretamente com a pulseira. <strong>Nenhum dado é salvo no histórico ou sobrescreve métricas do aplicativo</strong> (apenas o relógio e clima podem ser enviados para a pulseira).
                 </p>
               </div>
-              <div class="d-flex align-center gap-2">
+              <div class="d-flex align-center gap-3 flex-wrap">
+                <div id="progress-test-read-all" class="test-progress-bar-wrap"></div>
                 <button id="btn-test-read-all" class="btn btn-primary">
                   <span>🔄</span> Sincronizar Tudo
                 </button>
@@ -432,7 +929,10 @@
               <div class="test-card-header">
                 <span class="test-card-icon">👟</span>
                 <h4>Atividade Atual</h4>
-                <button class="btn btn-secondary btn-sm test-action-btn" id="btn-test-activity">Ler</button>
+                <div class="test-btn-group">
+                  <span id="progress-test-activity" class="test-progress-inline"></span>
+                  <button class="btn btn-secondary btn-sm test-action-btn" id="btn-test-activity">Ler</button>
+                </div>
               </div>
               <div class="test-card-body">
                 <div class="test-stat-row">
@@ -458,7 +958,10 @@
               <div class="test-card-header">
                 <span class="test-card-icon">🔋</span>
                 <h4>Bateria</h4>
-                <button class="btn btn-secondary btn-sm test-action-btn" id="btn-test-battery">Ler</button>
+                <div class="test-btn-group">
+                  <span id="progress-test-battery" class="test-progress-inline"></span>
+                  <button class="btn btn-secondary btn-sm test-action-btn" id="btn-test-battery">Ler</button>
+                </div>
               </div>
               <div class="test-card-body">
                 <div class="test-stat-row">
@@ -487,7 +990,10 @@
               <div class="test-card-header">
                 <span class="test-card-icon">❤️</span>
                 <h4>Frequência Cardíaca</h4>
-                <button class="btn btn-secondary btn-sm test-action-btn" id="btn-test-heart">Medir</button>
+                <div class="test-btn-group">
+                  <span id="progress-test-heart" class="test-progress-inline"></span>
+                  <button class="btn btn-secondary btn-sm test-action-btn" id="btn-test-heart">Medir</button>
+                </div>
               </div>
               <div class="test-card-body">
                 <div class="test-stat-row">
@@ -508,7 +1014,8 @@
               <div class="test-card-header">
                 <span class="test-card-icon">🕒</span>
                 <h4>Relógio da Pulseira</h4>
-                <div class="d-flex gap-1">
+                <div class="test-btn-group">
+                  <span id="progress-test-time" class="test-progress-inline"></span>
                   <button class="btn btn-secondary btn-sm test-action-btn" id="btn-test-time-read">Ler</button>
                   <button class="btn btn-primary btn-sm test-action-btn" id="btn-test-time-sync" title="Ajustar relógio da pulseira">Ajustar</button>
                 </div>
@@ -537,7 +1044,10 @@
               <div class="test-card-header">
                 <span class="test-card-icon">ℹ️</span>
                 <h4>Dados do Aparelho</h4>
-                <button class="btn btn-secondary btn-sm test-action-btn" id="btn-test-device-info">Ler</button>
+                <div class="test-btn-group">
+                  <span id="progress-test-device-info" class="test-progress-inline"></span>
+                  <button class="btn btn-secondary btn-sm test-action-btn" id="btn-test-device-info">Ler</button>
+                </div>
               </div>
               <div class="test-card-body">
                 <div class="test-stat-row">
@@ -567,7 +1077,10 @@
               <div class="test-card-header">
                 <span class="test-card-icon">⏰</span>
                 <h4>Alarmes Configurados</h4>
-                <button class="btn btn-secondary btn-sm test-action-btn" id="btn-test-alarms">Ler</button>
+                <div class="test-btn-group">
+                  <span id="progress-test-alarms" class="test-progress-inline"></span>
+                  <button class="btn btn-secondary btn-sm test-action-btn" id="btn-test-alarms">Ler</button>
+                </div>
               </div>
               <div class="test-card-body">
                 <div id="test-alarms-list" class="test-alarms-container">
@@ -589,7 +1102,8 @@
                   Edite os dados dos cards abaixo (Temperatura e Condição) e envie para a Mi Band 6 testar a exibição na tela do relógio.
                 </p>
               </div>
-              <div class="d-flex gap-2">
+              <div class="d-flex align-center gap-2 flex-wrap">
+                <span id="progress-test-weather" class="test-progress-inline"></span>
                 <button id="btn-test-weather-fetch" class="btn btn-secondary">
                   <span>🌐</span> Buscar Previsão da Internet
                 </button>
@@ -630,7 +1144,7 @@
               <form id="form-test-notify">
                 <div class="form-group">
                   <label for="test-notify-category">Categoria do Alerta</label>
-                  <select id="test-notify-category" class="form-select">
+                  <select id="test-notify-category" class="form-select modern-select">
                     <option value="3" selected>Chamada Telefônica (Incoming Call)</option>
                     <option value="0">Alerta Simples (Simple Alert)</option>
                     <option value="5">SMS / Mensagem</option>
@@ -646,9 +1160,12 @@
                   <label for="test-notify-text">Mensagem de Texto</label>
                   <input type="text" id="test-notify-text" value="Teste de comunicação em tempo real!" />
                 </div>
-                <button type="submit" class="btn btn-primary w-100">
-                  <span>📨</span> Enviar Notificação para Pulseira
-                </button>
+                <div class="d-flex align-center gap-2 mt-3 flex-wrap">
+                  <button type="submit" class="btn btn-primary flex-1">
+                    <span>📨</span> Enviar Notificação para Pulseira
+                  </button>
+                  <span id="progress-test-notify" class="test-progress-inline"></span>
+                </div>
               </form>
             </div>
 
@@ -659,7 +1176,7 @@
               </p>
               <div class="form-group">
                 <label for="test-vibrate-count">Repetições de Vibração</label>
-                <select id="test-vibrate-count" class="form-select">
+                <select id="test-vibrate-count" class="form-select modern-select">
                   <option value="1">1 vez (curta)</option>
                   <option value="2" selected>2 vezes (padrão localizar)</option>
                   <option value="3">3 vezes (chamada persistente)</option>
@@ -669,9 +1186,12 @@
                 <label for="test-vibrate-text">Texto exibido na tela</label>
                 <input type="text" id="test-vibrate-text" value="Localizar MiBand" />
               </div>
-              <button type="button" id="btn-test-trigger-vibrate" class="btn btn-secondary w-100 mt-2">
-                <span>🔔</span> Acionar Vibração Imediata
-              </button>
+              <div class="d-flex align-center gap-2 mt-2 flex-wrap">
+                <button type="button" id="btn-test-trigger-vibrate" class="btn btn-secondary flex-1">
+                  <span>🔔</span> Acionar Vibração Imediata
+                </button>
+                <span id="progress-test-vibrate" class="test-progress-inline"></span>
+              </div>
             </div>
           </div>
 

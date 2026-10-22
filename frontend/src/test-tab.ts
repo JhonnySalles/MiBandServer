@@ -1,7 +1,7 @@
 // Módulo da Aba de Testes & Laboratório da Mi Band 6
 
 let API_BASE_URL = 'http://localhost:8190';
-let notifyFn: (msg: string, type?: 'success' | 'error') => void = console.log;
+let notifyFn: (msg: string, type?: 'success' | 'error' | 'info') => void = console.log;
 
 interface LogEntry {
   ts: string;
@@ -17,7 +17,7 @@ interface TestApiResponse<T = any> {
   logs: LogEntry[];
 }
 
-export function initTestTab(apiUrl: string, showToast: (msg: string, type?: 'success' | 'error') => void) {
+export function initTestTab(apiUrl: string, showToast: (msg: string, type?: 'success' | 'error' | 'info') => void) {
   API_BASE_URL = apiUrl;
   notifyFn = showToast;
 
@@ -58,10 +58,6 @@ function appendLog(level: string, msg: string, ts?: string) {
   box.scrollTop = box.scrollHeight;
 }
 
-function appendBatchLogs(logs: LogEntry[]) {
-  if (!logs || logs.length === 0) return;
-  logs.forEach(l => appendLog(l.level, l.msg, l.ts));
-}
 
 function setConsoleStatus(statusText: string, isBusy: boolean = false) {
   const el = document.getElementById('test-console-status');
@@ -99,43 +95,211 @@ function setupConsoleActions() {
 }
 
 // -------------------------------------------------------------
-// Chamadas HTTP da API de Teste
+// Indicadores de Progresso Visuais ao Lado dos Botões
 // -------------------------------------------------------------
-async function executeTestAction<T = any>(
-  endpoint: string, 
+function setButtonProgress(
+  indicatorId: string, 
+  state: 'idle' | 'running' | 'success' | 'error', 
+  text?: string
+) {
+  const el = document.getElementById(indicatorId);
+  if (!el) return;
+
+  if (state === 'idle') {
+    el.className = 'test-progress-inline';
+    el.innerHTML = '';
+  } else if (state === 'running') {
+    el.className = 'test-progress-inline running';
+    el.innerHTML = `<span class="test-spinner"></span> <span>${text || 'Executando...'}</span>`;
+  } else if (state === 'success') {
+    el.className = 'test-progress-inline success';
+    el.innerHTML = `<span>✓</span> <span>${text || 'Concluído'}</span>`;
+    setTimeout(() => {
+      if (el.classList.contains('success')) {
+        setButtonProgress(indicatorId, 'idle');
+      }
+    }, 4500);
+  } else if (state === 'error') {
+    el.className = 'test-progress-inline error';
+    el.innerHTML = `<span>✕</span> <span>${text || 'Falha'}</span>`;
+    setTimeout(() => {
+      if (el.classList.contains('error')) {
+        setButtonProgress(indicatorId, 'idle');
+      }
+    }, 5500);
+  }
+}
+
+function setReadAllProgress(
+  percent: number, 
+  stepText: string, 
+  isDone: boolean = false, 
+  isError: boolean = false
+) {
+  const wrap = document.getElementById('progress-test-read-all');
+  if (!wrap) return;
+
+  if (isDone) {
+    wrap.innerHTML = `
+      <div class="test-progress-inline success" style="align-self: flex-start;">
+        <span>✓</span> <span>${stepText || 'Sincronização concluída!'}</span>
+      </div>
+    `;
+    setTimeout(() => {
+      wrap.innerHTML = '';
+    }, 5000);
+    return;
+  }
+
+  if (isError) {
+    wrap.innerHTML = `
+      <div class="test-progress-inline error" style="align-self: flex-start;">
+        <span>✕</span> <span>${stepText || 'Erro na sincronização'}</span>
+      </div>
+    `;
+    setTimeout(() => {
+      wrap.innerHTML = '';
+    }, 6000);
+    return;
+  }
+
+  wrap.innerHTML = `
+    <div class="test-progress-bar-label">
+      <span class="step-text">${stepText}</span>
+      <span class="percent-text">${percent}%</span>
+    </div>
+    <div class="test-progress-bar-container">
+      <div class="test-progress-bar-fill" style="width: ${percent}%;"></div>
+    </div>
+  `;
+}
+
+// -------------------------------------------------------------
+// Chamadas HTTP / SSE da API de Teste com Callback em Tempo Real
+// -------------------------------------------------------------
+async function executeStreamTestAction<T = any>(
+  action: string, 
   payload: any = {}, 
   actionLabel: string, 
-  btnElement?: HTMLButtonElement | null
+  btnElement?: HTMLButtonElement | null,
+  indicatorId?: string,
+  onStepDone?: (step: string, data: any) => void
 ): Promise<TestApiResponse<T> | null> {
   if (btnElement) {
     btnElement.disabled = true;
     btnElement.classList.add('loading');
   }
+
+  if (indicatorId) {
+    setButtonProgress(indicatorId, 'running', 'Iniciando...');
+  }
+  if (action === 'read_all') {
+    setReadAllProgress(5, 'Iniciando sincronização...');
+  }
+
   setConsoleStatus(`Executando ${actionLabel}...`, true);
   appendLog('INFO', `>>> Disparando comando: ${actionLabel}...`);
 
+  const requestBody = {
+    action,
+    ...payload
+  };
+
   try {
-    const res = await fetch(`${API_BASE_URL}/api/test${endpoint}`, {
+    const res = await fetch(`${API_BASE_URL}/api/test/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(requestBody)
     });
 
-    const result: TestApiResponse<T> = await res.json();
-    appendBatchLogs(result.logs || []);
-
-    if (result.success) {
-      appendLog('OK', `✓ ${actionLabel} concluído em ${result.duration_ms}ms.`);
-      notifyFn(`${actionLabel} realizado com sucesso! (${result.duration_ms}ms)`, 'success');
-    } else {
-      appendLog('ERROR', `✕ Falha em ${actionLabel}: ${result.error || 'Erro desconhecido'}`);
-      notifyFn(`Erro: ${result.error || 'Falha na comunicação'}`, 'error');
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}: ${res.statusText}`);
     }
 
-    return result;
+    const reader = res.body?.getReader();
+    if (!reader) {
+      throw new Error('Streaming não suportado pelo navegador.');
+    }
+
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+    let finalResult: TestApiResponse<T> | null = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n\n');
+      buffer = lines.pop() || '';
+
+      for (const block of lines) {
+        const trimmed = block.trim();
+        if (!trimmed.startsWith('data:')) continue;
+        const jsonStr = trimmed.replace(/^data:\s*/, '');
+        try {
+          const ev = JSON.parse(jsonStr);
+
+          if (ev.type === 'log') {
+            appendLog(ev.level, ev.msg, ev.ts);
+          } else if (ev.type === 'progress') {
+            if (indicatorId) {
+              setButtonProgress(indicatorId, 'running', ev.message || 'Executando...');
+            }
+            if (action === 'read_all') {
+              setReadAllProgress(ev.percent || 0, ev.message || 'Processando...');
+            }
+          } else if (ev.type === 'step_done') {
+            if (onStepDone) {
+              onStepDone(ev.step, ev.data);
+            }
+            if (action === 'read_all') {
+              setReadAllProgress(ev.percent || 0, ev.message || 'Etapa concluída');
+            }
+          } else if (ev.type === 'complete') {
+            finalResult = ev;
+          }
+        } catch (parseErr) {
+          console.error('Erro ao analisar mensagem SSE:', parseErr, jsonStr);
+        }
+      }
+    }
+
+    if (finalResult && finalResult.success) {
+      const durationStr = `${finalResult.duration_ms}ms`;
+      if (indicatorId) {
+        setButtonProgress(indicatorId, 'success', `Concluído (${durationStr})`);
+      }
+      if (action === 'read_all') {
+        setReadAllProgress(100, `Sincronização concluída em ${durationStr}!`, true);
+      }
+      appendLog('OK', `✓ ${actionLabel} concluído em ${durationStr}.`);
+      notifyFn(`${actionLabel} realizado com sucesso! (${durationStr})`, 'success');
+      return finalResult;
+    } else {
+      const errMsg = finalResult?.error || 'Falha na execução';
+      const shortErr = errMsg.length > 24 ? errMsg.substring(0, 22) + '...' : errMsg;
+      if (indicatorId) {
+        setButtonProgress(indicatorId, 'error', shortErr);
+      }
+      if (action === 'read_all') {
+        setReadAllProgress(0, shortErr, false, true);
+      }
+      appendLog('ERROR', `✕ Falha em ${actionLabel}: ${errMsg}`);
+      notifyFn(`Erro: ${errMsg}`, 'error');
+      return finalResult;
+    }
+
   } catch (err: any) {
-    appendLog('ERROR', `Exceção de rede ao comunicar com API: ${err.message}`);
-    notifyFn(`Erro de comunicação: ${err.message}`, 'error');
+    const errText = err.message || 'Erro de rede';
+    if (indicatorId) {
+      setButtonProgress(indicatorId, 'error', 'Erro de conexão');
+    }
+    if (action === 'read_all') {
+      setReadAllProgress(0, errText, false, true);
+    }
+    appendLog('ERROR', `Exceção de rede ao comunicar com API: ${errText}`);
+    notifyFn(`Erro de comunicação: ${errText}`, 'error');
     return null;
   } finally {
     if (btnElement) {
@@ -150,25 +314,64 @@ async function executeTestAction<T = any>(
 // Cards de Diagnóstico & Leituras
 // -------------------------------------------------------------
 function setupMetricCardsActions() {
-  const btnReadAll = document.getElementById('btn-test-read-all') as HTMLButtonElement;
-  const btnActivity = document.getElementById('btn-test-activity') as HTMLButtonElement;
-  const btnBattery = document.getElementById('btn-test-battery') as HTMLButtonElement;
-  const btnHeart = document.getElementById('btn-test-heart') as HTMLButtonElement;
-  const btnTimeRead = document.getElementById('btn-test-time-read') as HTMLButtonElement;
-  const btnTimeSync = document.getElementById('btn-test-time-sync') as HTMLButtonElement;
-  const btnDeviceInfo = document.getElementById('btn-test-device-info') as HTMLButtonElement;
-  const btnAlarms = document.getElementById('btn-test-alarms') as HTMLButtonElement;
+  const btnReadAll = document.getElementById('btn-test-read-all') as HTMLButtonElement | null;
+  const btnActivity = document.getElementById('btn-test-activity') as HTMLButtonElement | null;
+  const btnBattery = document.getElementById('btn-test-battery') as HTMLButtonElement | null;
+  const btnHeart = document.getElementById('btn-test-heart') as HTMLButtonElement | null;
+  const btnTimeRead = document.getElementById('btn-test-time-read') as HTMLButtonElement | null;
+  const btnTimeSync = document.getElementById('btn-test-time-sync') as HTMLButtonElement | null;
+  const btnDeviceInfo = document.getElementById('btn-test-device-info') as HTMLButtonElement | null;
+  const btnAlarms = document.getElementById('btn-test-alarms') as HTMLButtonElement | null;
 
   // 1. Sincronizar Tudo
   if (btnReadAll) {
     btnReadAll.addEventListener('click', async () => {
-      const res = await executeTestAction<any>('/read-all', {}, 'Sincronizar Tudo', btnReadAll);
+      // Inicia indicadores nos cards individuais para feedback sincronizado
+      setButtonProgress('progress-test-activity', 'running', 'Aguardando...');
+      setButtonProgress('progress-test-battery', 'running', 'Aguardando...');
+      setButtonProgress('progress-test-device-info', 'running', 'Aguardando...');
+      setButtonProgress('progress-test-time', 'running', 'Aguardando...');
+      setButtonProgress('progress-test-alarms', 'running', 'Aguardando...');
+
+      const res = await executeStreamTestAction<any>(
+        'read_all', 
+        {}, 
+        'Sincronizar Tudo', 
+        btnReadAll,
+        undefined,
+        (step, data) => {
+          // Callback em tempo real: atualiza imediatamente cada card assim que recebido
+          if (step === 'activity') {
+            updateActivityUI(data);
+            setButtonProgress('progress-test-activity', 'success', 'Lido');
+          } else if (step === 'battery') {
+            updateBatteryUI(data);
+            setButtonProgress('progress-test-battery', 'success', 'Lido');
+          } else if (step === 'device_info') {
+            updateDeviceInfoUI(data);
+            setButtonProgress('progress-test-device-info', 'success', 'Lido');
+          } else if (step === 'time') {
+            updateTimeUI(data);
+            setButtonProgress('progress-test-time', 'success', 'Verificado');
+          } else if (step === 'alarms') {
+            updateAlarmsUI(data);
+            setButtonProgress('progress-test-alarms', 'success', 'Lido');
+          }
+        }
+      );
+
       if (res && res.success && res.data) {
         updateActivityUI(res.data.activity);
         updateBatteryUI(res.data.battery);
         updateDeviceInfoUI(res.data.device_info);
         updateTimeUI(res.data.time);
         updateAlarmsUI(res.data.alarms);
+      } else if (!res || !res.success) {
+        setButtonProgress('progress-test-activity', 'error', 'Interrompido');
+        setButtonProgress('progress-test-battery', 'error', 'Interrompido');
+        setButtonProgress('progress-test-device-info', 'error', 'Interrompido');
+        setButtonProgress('progress-test-time', 'error', 'Interrompido');
+        setButtonProgress('progress-test-alarms', 'error', 'Interrompido');
       }
     });
   }
@@ -176,7 +379,13 @@ function setupMetricCardsActions() {
   // 2. Atividade
   if (btnActivity) {
     btnActivity.addEventListener('click', async () => {
-      const res = await executeTestAction<any>('/read/activity', {}, 'Leitura de Atividade', btnActivity);
+      const res = await executeStreamTestAction<any>(
+        'activity', 
+        {}, 
+        'Leitura de Atividade', 
+        btnActivity,
+        'progress-test-activity'
+      );
       if (res && res.success && res.data) {
         updateActivityUI(res.data);
       }
@@ -186,7 +395,13 @@ function setupMetricCardsActions() {
   // 3. Bateria
   if (btnBattery) {
     btnBattery.addEventListener('click', async () => {
-      const res = await executeTestAction<any>('/read/battery', {}, 'Leitura de Bateria', btnBattery);
+      const res = await executeStreamTestAction<any>(
+        'battery', 
+        {}, 
+        'Leitura de Bateria', 
+        btnBattery,
+        'progress-test-battery'
+      );
       if (res && res.success && res.data) {
         updateBatteryUI(res.data);
       }
@@ -198,7 +413,14 @@ function setupMetricCardsActions() {
     btnHeart.addEventListener('click', async () => {
       const heartValEl = document.getElementById('test-val-heart');
       if (heartValEl) heartValEl.innerHTML = '<span class="pulse-dot"></span> Medindo...';
-      const res = await executeTestAction<any>('/read/heart-rate', {}, 'Medição de Frequência Cardíaca', btnHeart);
+      
+      const res = await executeStreamTestAction<any>(
+        'heart_rate', 
+        {}, 
+        'Medição de Frequência Cardíaca', 
+        btnHeart,
+        'progress-test-heart'
+      );
       if (res && res.success && res.data && res.data.heart_rate) {
         if (heartValEl) heartValEl.innerHTML = `${res.data.heart_rate} <small>BPM</small>`;
         const timeEl = document.getElementById('test-time-heart');
@@ -212,7 +434,13 @@ function setupMetricCardsActions() {
   // 5. Horário da Pulseira
   if (btnTimeRead) {
     btnTimeRead.addEventListener('click', async () => {
-      const res = await executeTestAction<any>('/read/time', {}, 'Leitura de Horário', btnTimeRead);
+      const res = await executeStreamTestAction<any>(
+        'time_read', 
+        {}, 
+        'Leitura de Horário', 
+        btnTimeRead,
+        'progress-test-time'
+      );
       if (res && res.success && res.data) {
         updateTimeUI(res.data);
       }
@@ -222,7 +450,13 @@ function setupMetricCardsActions() {
   // 6. Sincronizar Relógio da Pulseira
   if (btnTimeSync) {
     btnTimeSync.addEventListener('click', async () => {
-      const res = await executeTestAction<any>('/time/sync', {}, 'Ajuste do Relógio', btnTimeSync);
+      const res = await executeStreamTestAction<any>(
+        'time_sync', 
+        {}, 
+        'Ajuste do Relógio', 
+        btnTimeSync,
+        'progress-test-time'
+      );
       if (res && res.success && res.data) {
         updateTimeUI(res.data.time);
       }
@@ -232,7 +466,13 @@ function setupMetricCardsActions() {
   // 7. Dados do Aparelho (DIS)
   if (btnDeviceInfo) {
     btnDeviceInfo.addEventListener('click', async () => {
-      const res = await executeTestAction<any>('/read/device-info', {}, 'Leitura DIS', btnDeviceInfo);
+      const res = await executeStreamTestAction<any>(
+        'device_info', 
+        {}, 
+        'Leitura DIS', 
+        btnDeviceInfo,
+        'progress-test-device-info'
+      );
       if (res && res.success && res.data) {
         updateDeviceInfoUI(res.data);
       }
@@ -242,7 +482,13 @@ function setupMetricCardsActions() {
   // 8. Alarmes
   if (btnAlarms) {
     btnAlarms.addEventListener('click', async () => {
-      const res = await executeTestAction<any>('/read/alarms', {}, 'Consulta de Alarmes', btnAlarms);
+      const res = await executeStreamTestAction<any>(
+        'alarms', 
+        {}, 
+        'Consulta de Alarmes', 
+        btnAlarms,
+        'progress-test-alarms'
+      );
       if (res && res.success && res.data) {
         updateAlarmsUI(res.data);
       }
@@ -352,40 +598,33 @@ let activeForecastList: DailyForecastItem[] = [];
 let activeCurrentWeather: any = null;
 
 function setupWeatherActions() {
-  const btnFetch = document.getElementById('btn-test-weather-fetch') as HTMLButtonElement;
-  const btnSend = document.getElementById('btn-test-weather-send') as HTMLButtonElement;
-  const cityInput = document.getElementById('test-weather-city') as HTMLInputElement;
+  const btnFetch = document.getElementById('btn-test-weather-fetch') as HTMLButtonElement | null;
+  const btnSend = document.getElementById('btn-test-weather-send') as HTMLButtonElement | null;
+  const cityInput = document.getElementById('test-weather-city') as HTMLInputElement | null;
 
   if (btnFetch) {
     btnFetch.addEventListener('click', async () => {
-      btnFetch.disabled = true;
-      appendLog('INFO', 'Consultando previsão estendida na API meteorológica...');
-      try {
-        const res = await fetch(`${API_BASE_URL}/api/test/weather/preview`);
-        if (!res.ok) throw new Error('Falha na resposta da API');
-        const data = await res.json();
-        
-        const cur = data.current || {};
-        const daily = data.daily_forecast || [];
+      const city = cityInput ? cityInput.value.trim() : 'São Paulo';
+      const res = await executeStreamTestAction<any>(
+        'weather_preview',
+        { city },
+        'Consulta de Previsão',
+        btnFetch,
+        'progress-test-weather'
+      );
+
+      if (res && res.success && res.data) {
+        const cur = res.data.current || {};
+        const daily = res.data.daily_forecast || [];
         activeCurrentWeather = cur;
 
-        // Atualizar card de Hoje
-        const todayTemp = document.getElementById('test-weather-today-temp') as HTMLInputElement;
-        const todayCond = document.getElementById('test-weather-today-cond') as HTMLInputElement;
+        const todayTemp = document.getElementById('test-weather-today-temp') as HTMLInputElement | null;
+        const todayCond = document.getElementById('test-weather-today-cond') as HTMLInputElement | null;
         if (todayTemp) todayTemp.value = String(cur.temp ?? 24);
         if (todayCond) todayCond.value = cur.condition ?? 'Ensolarado';
 
-        // Renderizar cards dos próximos dias
         activeForecastList = daily;
         renderForecastEditorCards(daily);
-
-        appendLog('OK', `Previsão obtida com sucesso: ${daily.length} dias futuros carregados.`);
-        notifyFn('Previsão carregada! Você pode ajustar os valores antes de enviar.', 'success');
-      } catch (e: any) {
-        appendLog('ERROR', `Erro ao buscar previsão da internet: ${e.message}`);
-        notifyFn('Erro ao buscar previsão meteorológica.', 'error');
-      } finally {
-        btnFetch.disabled = false;
       }
     });
   }
@@ -393,11 +632,10 @@ function setupWeatherActions() {
   if (btnSend) {
     btnSend.addEventListener('click', async () => {
       const city = cityInput ? cityInput.value.trim() : 'São Paulo';
-      const todayTempEl = document.getElementById('test-weather-today-temp') as HTMLInputElement;
-      const todayCondEl = document.getElementById('test-weather-today-cond') as HTMLInputElement;
+      const todayTempEl = document.getElementById('test-weather-today-temp') as HTMLInputElement | null;
+      const todayCondEl = document.getElementById('test-weather-today-cond') as HTMLInputElement | null;
 
       const condVal = todayCondEl?.value?.trim() || 'Ensolarado';
-      // Se a condição for a mesma obtida da API, preserva o código. Se foi customizada, envia undefined para acionar motor semântico
       const curCode = (activeCurrentWeather && activeCurrentWeather.condition === condVal) 
         ? activeCurrentWeather.code 
         : undefined;
@@ -408,14 +646,13 @@ function setupWeatherActions() {
         code: curCode
       };
 
-      // Coletar dados editados dos dias futuros
       const dailyPayload: DailyForecastItem[] = [];
       const cards = document.querySelectorAll('.forecast-edit-card.future');
       cards.forEach((card, idx) => {
-        const maxInput = card.querySelector('.input-temp-max') as HTMLInputElement;
-        const minInput = card.querySelector('.input-temp-min') as HTMLInputElement;
-        const condInput = card.querySelector('.input-cond') as HTMLInputElement;
-        const labelSpan = card.querySelector('.day-badge') as HTMLElement;
+        const maxInput = card.querySelector('.input-temp-max') as HTMLInputElement | null;
+        const minInput = card.querySelector('.input-temp-min') as HTMLInputElement | null;
+        const condInput = card.querySelector('.input-cond') as HTMLInputElement | null;
+        const labelSpan = card.querySelector('.day-badge') as HTMLElement | null;
 
         const dayCond = condInput?.value?.trim() || 'Ensolarado';
         const dayCode = (activeForecastList[idx] && activeForecastList[idx].condition === dayCond)
@@ -437,7 +674,13 @@ function setupWeatherActions() {
         daily_forecast: dailyPayload
       };
 
-      await executeTestAction('/weather/send', body, 'Envio de Previsão do Tempo', btnSend);
+      await executeStreamTestAction(
+        'weather_send', 
+        body, 
+        'Envio de Previsão do Tempo', 
+        btnSend,
+        'progress-test-weather'
+      );
     });
   }
 }
@@ -478,16 +721,16 @@ function renderForecastEditorCards(dailyList: DailyForecastItem[]) {
 // Seção de Notificação & Vibração
 // -------------------------------------------------------------
 function setupNotificationActions() {
-  const formNotify = document.getElementById('form-test-notify') as HTMLFormElement;
-  const btnVibrate = document.getElementById('btn-test-trigger-vibrate') as HTMLButtonElement;
+  const formNotify = document.getElementById('form-test-notify') as HTMLFormElement | null;
+  const btnVibrate = document.getElementById('btn-test-trigger-vibrate') as HTMLButtonElement | null;
 
   if (formNotify) {
     formNotify.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const catEl = document.getElementById('test-notify-category') as HTMLSelectElement;
-      const titleEl = document.getElementById('test-notify-title') as HTMLInputElement;
-      const textEl = document.getElementById('test-notify-text') as HTMLInputElement;
-      const submitBtn = formNotify.querySelector('button[type="submit"]') as HTMLButtonElement;
+      const catEl = document.getElementById('test-notify-category') as HTMLSelectElement | null;
+      const titleEl = document.getElementById('test-notify-title') as HTMLInputElement | null;
+      const textEl = document.getElementById('test-notify-text') as HTMLInputElement | null;
+      const submitBtn = formNotify.querySelector('button[type="submit"]') as HTMLButtonElement | null;
 
       const body = {
         category: parseInt(catEl?.value || '3', 10),
@@ -495,21 +738,33 @@ function setupNotificationActions() {
         text: textEl?.value.trim() || 'Teste'
       };
 
-      await executeTestAction('/notify', body, 'Disparo de Notificação', submitBtn);
+      await executeStreamTestAction(
+        'notify', 
+        body, 
+        'Disparo de Notificação', 
+        submitBtn,
+        'progress-test-notify'
+      );
     });
   }
 
   if (btnVibrate) {
     btnVibrate.addEventListener('click', async () => {
-      const countEl = document.getElementById('test-vibrate-count') as HTMLSelectElement;
-      const textEl = document.getElementById('test-vibrate-text') as HTMLInputElement;
+      const countEl = document.getElementById('test-vibrate-count') as HTMLSelectElement | null;
+      const textEl = document.getElementById('test-vibrate-text') as HTMLInputElement | null;
 
       const body = {
         count: parseInt(countEl?.value || '2', 10),
         text: textEl?.value.trim() || 'Localizar MiBand'
       };
 
-      await executeTestAction('/vibrate', body, 'Disparo de Vibração', btnVibrate);
+      await executeStreamTestAction(
+        'vibrate', 
+        body, 
+        'Disparo de Vibração', 
+        btnVibrate,
+        'progress-test-vibrate'
+      );
     });
   }
 }

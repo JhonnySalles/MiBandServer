@@ -84,13 +84,20 @@ class WeatherService:
 
         if not result:
             current = self.get_current_weather(lat, lon, prov, token, target_city)
+            cur_temp = current.get("temp", 24)
+            weekdays = ["Hoje", "Amanhã", "Depois", "Quarta", "Quinta", "Sexta", "Sábado"]
+            daily_list = []
+            for i, d in enumerate(weekdays):
+                daily_list.append({
+                    "day": d,
+                    "temp_max": cur_temp + (2 if i % 2 == 0 else 1),
+                    "temp_min": cur_temp - (4 if i % 2 == 0 else 3),
+                    "condition": current.get("condition", "Ensolarado"),
+                    "code": current.get("code", 0)
+                })
             result = {
                 "current": current,
-                "daily_forecast": [
-                    {"day": "Hoje", "temp_max": current.get("temp", 24) + 2, "temp_min": current.get("temp", 24) - 4, "condition": current.get("condition", "Ensolarado")},
-                    {"day": "Amanhã", "temp_max": current.get("temp", 24) + 1, "temp_min": current.get("temp", 24) - 3, "condition": "Parcialmente Nublado"},
-                    {"day": "Depois", "temp_max": current.get("temp", 24) + 3, "temp_min": current.get("temp", 24) - 2, "condition": "Ensolarado"}
-                ],
+                "daily_forecast": daily_list,
                 "provider": prov
             }
 
@@ -153,12 +160,24 @@ class WeatherService:
                 sunset_list = daily.get("sunset", [])
 
                 daily_forecast = []
-                day_names = ["Hoje", "Amanhã", "Depois", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
-                for i in range(min(len(time_list), 5)):
-                    label = day_names[i] if i < len(day_names) else time_list[i]
+                pt_weekdays = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
+                from datetime import date
+                for i in range(min(len(time_list), 7)):
+                    iso_date = time_list[i]
+                    if i == 0:
+                        label = "Hoje"
+                    elif i == 1:
+                        label = "Amanhã"
+                    else:
+                        try:
+                            d_obj = date.fromisoformat(iso_date)
+                            label = pt_weekdays[d_obj.weekday()]
+                        except Exception:
+                            label = iso_date
+
                     code_val = codes_list[i] if i < len(codes_list) else current_code
                     daily_forecast.append({
-                        "date": time_list[i],
+                        "date": iso_date,
                         "day": label,
                         "code": code_val,
                         "temp_max": round(max_list[i]) if i < len(max_list) else current_temp + 2,
@@ -238,16 +257,57 @@ class WeatherService:
                 current_cond = first_weather.get("description", "Céu Limpo").capitalize()
                 current_code = first_weather.get("id", 800)
                 
+                # Agrupar por data (YYYY-MM-DD)
+                from datetime import date, timedelta
+                grouped_by_date = {}
+                for item in items:
+                    dt_txt = item.get("dt_txt", "")
+                    d_key = dt_txt.split(" ")[0] if " " in dt_txt else dt_txt[:10]
+                    if d_key not in grouped_by_date:
+                        grouped_by_date[d_key] = []
+                    grouped_by_date[d_key].append(item)
+
                 daily_forecast = []
-                for item in items[::8][:4]:  # Intervalos de 24h aproximados
-                    item_weather = item.get("weather", [{}])[0]
+                pt_weekdays = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
+                sorted_dates = sorted(grouped_by_date.keys())
+                for idx, d_key in enumerate(sorted_dates[:7]):
+                    day_items = grouped_by_date[d_key]
+                    maxs = [it.get("main", {}).get("temp_max", current_temp) for it in day_items]
+                    mins = [it.get("main", {}).get("temp_min", current_temp) for it in day_items]
+                    mid_weather = day_items[len(day_items)//2].get("weather", [{}])[0]
+                    
+                    if idx == 0:
+                        label = "Hoje"
+                    elif idx == 1:
+                        label = "Amanhã"
+                    else:
+                        try:
+                            label = pt_weekdays[date.fromisoformat(d_key).weekday()]
+                        except Exception:
+                            label = d_key
+
                     daily_forecast.append({
-                        "date": item.get("dt_txt", ""),
-                        "day": item.get("dt_txt", "").split(" ")[0],
-                        "temp_max": round(item.get("main", {}).get("temp_max", current_temp + 2)),
-                        "temp_min": round(item.get("main", {}).get("temp_min", current_temp - 3)),
-                        "condition": item_weather.get("description", "Céu Limpo").capitalize(),
-                        "code": item_weather.get("id", 800)
+                        "date": d_key,
+                        "day": label,
+                        "temp_max": round(max(maxs)),
+                        "temp_min": round(min(mins)),
+                        "condition": mid_weather.get("description", "Céu Limpo").capitalize(),
+                        "code": mid_weather.get("id", 800)
+                    })
+
+                # Se a API retornou menos de 7 dias (ex: 5 dias), extrapola até completar 7
+                last_dt = date.fromisoformat(daily_forecast[-1]["date"]) if daily_forecast else date.today()
+                while len(daily_forecast) < 7:
+                    last_dt = last_dt + timedelta(days=1)
+                    idx = len(daily_forecast)
+                    label = "Amanhã" if idx == 1 else pt_weekdays[last_dt.weekday()]
+                    daily_forecast.append({
+                        "date": last_dt.isoformat(),
+                        "day": label,
+                        "temp_max": current_temp + (2 if idx % 2 == 0 else 1),
+                        "temp_min": current_temp - (4 if idx % 2 == 0 else 3),
+                        "condition": current_cond,
+                        "code": current_code
                     })
 
                 return {
@@ -300,7 +360,7 @@ class WeatherService:
             params = {
                 "key": token,
                 "q": query,
-                "days": "3",
+                "days": "7",
                 "lang": "pt"
             }
             res = requests.get(url, params=params, timeout=6.0)
@@ -311,17 +371,45 @@ class WeatherService:
                 current_cond = current.get("condition", {}).get("text", "Céu Limpo")
                 current_code = current.get("condition", {}).get("code", 1000)
                 
+                from datetime import date, timedelta
+                pt_weekdays = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
                 forecast_days = data.get("forecast", {}).get("forecastday", [])
                 daily_forecast = []
-                for f in forecast_days:
+                for idx, f in enumerate(forecast_days[:7]):
                     day_info = f.get("day", {})
+                    date_str = f.get("date", "")
+                    if idx == 0:
+                        label = "Hoje"
+                    elif idx == 1:
+                        label = "Amanhã"
+                    else:
+                        try:
+                            label = pt_weekdays[date.fromisoformat(date_str).weekday()]
+                        except Exception:
+                            label = date_str
+
                     daily_forecast.append({
-                        "date": f.get("date", ""),
-                        "day": f.get("date", ""),
+                        "date": date_str,
+                        "day": label,
                         "temp_max": round(day_info.get("maxtemp_c", current_temp + 2)),
                         "temp_min": round(day_info.get("mintemp_c", current_temp - 3)),
                         "condition": day_info.get("condition", {}).get("text", "Céu Limpo"),
                         "code": day_info.get("condition", {}).get("code", 1000)
+                    })
+
+                # Extrapolar até 7 dias se o plano da WeatherAPI retornar apenas 3 dias
+                last_dt = date.fromisoformat(daily_forecast[-1]["date"]) if daily_forecast else date.today()
+                while len(daily_forecast) < 7:
+                    last_dt = last_dt + timedelta(days=1)
+                    idx = len(daily_forecast)
+                    label = "Amanhã" if idx == 1 else pt_weekdays[last_dt.weekday()]
+                    daily_forecast.append({
+                        "date": last_dt.isoformat(),
+                        "day": label,
+                        "temp_max": current_temp + (2 if idx % 2 == 0 else 1),
+                        "temp_min": current_temp - (4 if idx % 2 == 0 else 3),
+                        "condition": current_cond,
+                        "code": current_code
                     })
 
                 return {
@@ -357,5 +445,225 @@ class WeatherService:
             return "Tempestade"
         return "Ensolarado"
 
+    def search_cities(
+        self,
+        query: str,
+        provider: Optional[str] = None,
+        api_token: Optional[str] = None
+    ) -> list:
+        """
+        Pesquisa cidades por nome no serviço de clima ativo ou Open-Meteo Geocoding.
+        Retorna lista de dicionários normalizados com:
+        [{"name": "...", "region": "...", "country": "...", "latitude": ..., "longitude": ..., "display_name": "..."}]
+        """
+        clean_query = (query or "").strip()
+        if len(clean_query) < 2:
+            return []
+
+        prov = (provider or settings.WEATHER_PROVIDER or "open-meteo").lower()
+        token = api_token or settings.WEATHER_API_KEY
+        cache_key = f"weather:city:search:{prov}:{clean_query.lower()}"
+
+        cached = cache.get(cache_key)
+        if cached and isinstance(cached, list):
+            return cached
+
+        results = []
+        try:
+            if prov == "weatherapi" and token:
+                url = "https://api.weatherapi.com/v1/search.json"
+                params = {"key": token, "q": clean_query}
+                res = requests.get(url, params=params, timeout=5.0)
+                if res.status_code == 200:
+                    for item in res.json():
+                        name = item.get("name", "")
+                        region = item.get("region", "")
+                        country = item.get("country", "")
+                        disp = f"{name}, {region} - {country}" if region else f"{name} - {country}"
+                        results.append({
+                            "name": name,
+                            "region": region,
+                            "country": country,
+                            "latitude": item.get("lat"),
+                            "longitude": item.get("lon"),
+                            "display_name": disp
+                        })
+
+            elif prov == "openweathermap" and token:
+                url = "https://api.openweathermap.org/geo/1.0/direct"
+                params = {"q": clean_query, "limit": 6, "appid": token}
+                res = requests.get(url, params=params, timeout=5.0)
+                if res.status_code == 200:
+                    for item in res.json():
+                        name = item.get("name", "")
+                        state = item.get("state", "")
+                        country = item.get("country", "")
+                        disp = f"{name}, {state} - {country}" if state else f"{name} - {country}"
+                        results.append({
+                            "name": name,
+                            "region": state,
+                            "country": country,
+                            "latitude": item.get("lat"),
+                            "longitude": item.get("lon"),
+                            "display_name": disp
+                        })
+
+            # Se não teve resultados ou é open-meteo (ou provedores sem token), usa Open-Meteo Geocoding
+            if not results:
+                url = "https://geocoding-api.open-meteo.com/v1/search"
+                params = {"name": clean_query, "count": 6, "language": "pt", "format": "json"}
+                res = requests.get(url, params=params, timeout=5.0)
+                if res.status_code == 200:
+                    data = res.json()
+                    for item in data.get("results", []):
+                        name = item.get("name", "")
+                        admin1 = item.get("admin1", "")
+                        country = item.get("country", "")
+                        disp = f"{name}, {admin1} - {country}" if admin1 else f"{name} - {country}"
+                        results.append({
+                            "name": name,
+                            "region": admin1,
+                            "country": country,
+                            "latitude": item.get("latitude"),
+                            "longitude": item.get("longitude"),
+                            "display_name": disp
+                        })
+        except Exception as e:
+            logger.warning(f"Erro ao pesquisar cidades ({e})")
+
+        if results:
+            cache.set(cache_key, results, ttl_seconds=86400)
+        return results
+
+    def reverse_geocode(
+        self,
+        latitude: float,
+        longitude: float,
+        provider: Optional[str] = None,
+        api_token: Optional[str] = None
+    ) -> Optional[dict]:
+        """
+        Descobre o nome da cidade a partir das coordenadas geográficas (lat, lon).
+        """
+        cache_key = f"weather:city:reverse:{latitude:.3f}:{longitude:.3f}"
+        cached = cache.get(cache_key)
+        if cached and isinstance(cached, dict):
+            return cached
+
+        prov = (provider or settings.WEATHER_PROVIDER or "open-meteo").lower()
+        token = api_token or settings.WEATHER_API_KEY
+        result = None
+
+        try:
+            # 1. Tenta OpenWeatherMap se houver token
+            if prov == "openweathermap" and token:
+                url = "https://api.openweathermap.org/geo/1.0/reverse"
+                params = {"lat": latitude, "lon": longitude, "limit": 1, "appid": token}
+                res = requests.get(url, params=params, timeout=5.0)
+                if res.status_code == 200:
+                    items = res.json()
+                    if items:
+                        item = items[0]
+                        name = item.get("name", "")
+                        state = item.get("state", "")
+                        country = item.get("country", "")
+                        disp = f"{name}, {state} - {country}" if state else f"{name} - {country}"
+                        result = {
+                            "name": name,
+                            "region": state,
+                            "country": country,
+                            "latitude": latitude,
+                            "longitude": longitude,
+                            "display_name": disp
+                        }
+
+            # 2. BigDataCloud Client Reverse Geocode (Gratuito, sem chave, suporte nativo pt-BR)
+            if not result:
+                url = "https://api.bigdatacloud.net/data/reverse-geocode-client"
+                params = {"latitude": latitude, "longitude": longitude, "localityLanguage": "pt"}
+                res = requests.get(url, params=params, timeout=5.0)
+                if res.status_code == 200:
+                    data = res.json()
+                    city = data.get("city") or data.get("locality") or data.get("principalSubdivision") or "Minha Localização"
+                    region = data.get("principalSubdivision", "")
+                    country = data.get("countryName", "")
+                    disp = f"{city}, {region} - {country}" if region and region != city else f"{city} - {country}"
+                    result = {
+                        "name": city,
+                        "region": region,
+                        "country": country,
+                        "latitude": latitude,
+                        "longitude": longitude,
+                        "display_name": disp
+                    }
+        except Exception as e:
+            logger.warning(f"Erro no reverse geocoding ({e})")
+
+        if result:
+            cache.set(cache_key, result, ttl_seconds=86400)
+        return result
+
+    def detect_location_by_ip(self) -> Optional[dict]:
+        """
+        Detecta a localização do computador / servidor com base no endereço IP público.
+        """
+        cache_key = "weather:location:ip_detected"
+        cached = cache.get(cache_key)
+        if cached and isinstance(cached, dict):
+            return cached
+
+        result = None
+        # 1. Tentar ipapi.co
+        try:
+            res = requests.get("https://ipapi.co/json/", headers={"User-Agent": "MiBandServer/1.0"}, timeout=5.0)
+            if res.status_code == 200:
+                data = res.json()
+                city = data.get("city")
+                if city:
+                    region = data.get("region", "")
+                    country = data.get("country_name", "")
+                    lat = data.get("latitude")
+                    lon = data.get("longitude")
+                    disp = f"{city}, {region} - {country}" if region else f"{city} - {country}"
+                    result = {
+                        "name": city,
+                        "region": region,
+                        "country": country,
+                        "latitude": lat,
+                        "longitude": lon,
+                        "display_name": disp
+                    }
+        except Exception as e:
+            logger.warning(f"Erro ao detectar IP via ipapi.co ({e})")
+
+        # 2. Fallback ip-api.com
+        if not result:
+            try:
+                res = requests.get("http://ip-api.com/json/", timeout=5.0)
+                if res.status_code == 200:
+                    data = res.json()
+                    if data.get("status") == "success":
+                        city = data.get("city")
+                        region = data.get("regionName", "")
+                        country = data.get("country", "")
+                        lat = data.get("lat")
+                        lon = data.get("lon")
+                        disp = f"{city}, {region} - {country}" if region else f"{city} - {country}"
+                        result = {
+                            "name": city,
+                            "region": region,
+                            "country": country,
+                            "latitude": lat,
+                            "longitude": lon,
+                            "display_name": disp
+                        }
+            except Exception as e:
+                logger.warning(f"Erro ao detectar IP via ip-api.com ({e})")
+
+        if result:
+            cache.set(cache_key, result, ttl_seconds=3600)
+        return result
+
 weather_service = WeatherService()
+
 

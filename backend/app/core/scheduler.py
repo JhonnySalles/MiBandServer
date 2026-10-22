@@ -5,7 +5,7 @@ from apscheduler.triggers.cron import CronTrigger
 from sqlmodel import Session, select
 
 from app.core.logger import logger
-from app.core.database import engine, DeviceConfig, IntegrationConfig, SyncSchedule, ActivityLog, SyncHistory, get_utc_now
+from app.core.database import engine, DeviceConfig, IntegrationConfig, SyncSchedule, ActivityLog, SyncHistory, WeatherHistory, get_utc_now
 from app.core.cache import cache
 from app.services.miband import miband_service
 from app.services.weather import weather_service
@@ -68,6 +68,25 @@ async def execute_sync_workflow(mac_address: str, auth_key: Optional[str] = None
             details=str(res.get("data", {}))
         )
         session.add(sync_log)
+
+        # Gravar histórico de clima
+        if extended_forecast and status_code == "SUCCESS":
+            cur = extended_forecast.get("current", {})
+            daily0 = (extended_forecast.get("daily_forecast") or [{}])[0]
+            w_log = WeatherHistory(
+                timestamp=now,
+                city=extended_forecast.get("city", "São Paulo"),
+                temp=int(cur.get("temp", 24)),
+                temp_min=daily0.get("temp_min"),
+                temp_max=daily0.get("temp_max"),
+                condition=str(cur.get("condition", "Ensolarado")),
+                humidity=cur.get("humidity"),
+                wind_speed=cur.get("wind_speed"),
+                weather_code=cur.get("code"),
+                provider=extended_forecast.get("provider", "Open-Meteo"),
+                source=f"SYNC_{source.upper()}"
+            )
+            session.add(w_log)
 
         if status_code == "SUCCESS":
             # Atualizar last_sync_time no banco SQLite
