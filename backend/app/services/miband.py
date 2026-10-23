@@ -1,6 +1,7 @@
 import asyncio
 from bleak import BleakScanner, BleakClient
-from typing import List, Dict, Optional
+from datetime import datetime
+from typing import List, Dict, Optional, Any
 from app.services.miband_protocol import MiBandProtocol
 from app.core.logger import logger
 
@@ -293,7 +294,7 @@ class MiBandService:
         self,
         mac_address: str,
         auth_key: Optional[str] = None,
-        start_time: Optional[any] = None
+        start_time: Optional[datetime] = None
     ) -> Dict:
         """Conecta na pulseira e extrai amostras intradiárias de passos e sono"""
         clean_key = auth_key.strip() if auth_key else ""

@@ -216,17 +216,26 @@ async def sync_band_settings(req: BandSettingsSyncRequest, session: Session = De
                     results["heart_rate_interval"] = ok
 
                 if scope in ("all", "alarms"):
-                    alarms_list = json.loads(settings.alarms or "[]")
+                    try:
+                        alarms_list = json.loads(settings.alarms or "[]")
+                    except Exception:
+                        alarms_list = []
                     ok = await protocol.set_alarms(alarms_list)
                     results["alarms"] = ok
 
                 if scope in ("all", "world_clocks"):
-                    clocks_list = json.loads(settings.world_clocks or "[]")
+                    try:
+                        clocks_list = json.loads(settings.world_clocks or "[]")
+                    except Exception:
+                        clocks_list = []
                     ok = await protocol.set_world_clocks(clocks_list)
                     results["world_clocks"] = ok
 
                 if scope in ("all", "reminders"):
-                    reminders_list = json.loads(settings.event_reminders or "[]")
+                    try:
+                        reminders_list = json.loads(settings.event_reminders or "[]")
+                    except Exception:
+                        reminders_list = []
                     ok = await protocol.set_event_reminders(reminders_list)
                     results["event_reminders"] = ok
 

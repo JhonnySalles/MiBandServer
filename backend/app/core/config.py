@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 from pydantic import BaseModel
 
 def get_db_url() -> str:
@@ -24,6 +25,7 @@ class Settings(BaseModel):
     LOG_DIR: str = os.getenv("LOG_DIR", "./logs")
     LOG_RETENTION_DAYS: int = int(os.getenv("LOG_RETENTION_DAYS", "30"))
     LOG_FILENAME: str = os.getenv("LOG_FILENAME", "MiBandServer.log")
+    API_KEY: Optional[str] = os.getenv("API_KEY", None)
 
 settings = Settings()
 

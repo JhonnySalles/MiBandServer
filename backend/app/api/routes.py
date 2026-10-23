@@ -3,6 +3,7 @@ from sqlmodel import Session, select
 from typing import List, Optional
 from pydantic import BaseModel
 from datetime import datetime, timezone, timedelta
+import re
 
 from app.core.database import (
     get_session, DeviceConfig, IntegrationConfig, ActivityLog,
@@ -89,6 +90,12 @@ def get_primary_device_config(session: Session = Depends(get_session)):
 @router.post("/config", response_model=DeviceConfig)
 def save_device_config(data: DeviceCreate, session: Session = Depends(get_session)):
     clean_mac = data.mac_address.strip().upper()
+    if not re.match(r"^([0-9A-F]{2}[:-]){5}([0-9A-F]{2})$", clean_mac):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Endereço MAC inválido ('{clean_mac}'). Formato esperado: XX:XX:XX:XX:XX:XX"
+        )
+
     clean_key = data.auth_key.strip()
     if clean_key.startswith("0x") or clean_key.startswith("0X"):
         clean_key = clean_key[2:]
@@ -97,6 +104,14 @@ def save_device_config(data: DeviceCreate, session: Session = Depends(get_sessio
         raise HTTPException(
             status_code=400, 
             detail=f"Auth Key inválida ({len(clean_key)} caracteres). Deve conter exatamente 32 caracteres hexadecimais."
+        )
+
+    try:
+        bytes.fromhex(clean_key)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Auth Key contém caracteres hexadecimais inválidos. Use apenas dígitos 0-9 e letras a-f."
         )
 
     existing = session.exec(select(DeviceConfig).where(DeviceConfig.mac_address == clean_mac)).first()

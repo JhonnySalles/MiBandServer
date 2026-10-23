@@ -92,17 +92,19 @@ async def test_stream(req: StreamTestRequest, session: Session = Depends(get_ses
     """Executa qualquer ação de teste BLE com streaming em tempo real via Server-Sent Events (SSE)"""
     event_queue: asyncio.Queue = asyncio.Queue()
 
+    worker_task: Optional[asyncio.Task] = None
+
     if req.action == "weather_preview":
+        integration = session.exec(select(IntegrationConfig)).first()
+        provider = integration.weather_provider if integration else None
+        token = integration.weather_api_token if integration else None
+        city = req.city or (integration.weather_city if integration else None)
+        lat = integration.latitude if integration else None
+        lon = integration.longitude if integration else None
+
         async def run_weather_preview():
             try:
                 event_queue.put_nowait({"type": "progress", "step": "fetching", "message": "Consultando provedor meteorológico...", "percent": 30})
-                integration = session.exec(select(IntegrationConfig)).first()
-                provider = integration.weather_provider if integration else None
-                token = integration.weather_api_token if integration else None
-                city = req.city or (integration.weather_city if integration else None)
-                lat = integration.latitude if integration else None
-                lon = integration.longitude if integration else None
-
                 event_queue.put_nowait({"type": "progress", "step": "fetching", "message": f"Buscando previsão para {city or 'São Paulo'}...", "percent": 65})
                 forecast = weather_service.get_extended_forecast(
                     latitude=lat,
@@ -136,7 +138,7 @@ async def test_stream(req: StreamTestRequest, session: Session = Depends(get_ses
             finally:
                 event_queue.put_nowait(None)
 
-        asyncio.create_task(run_weather_preview())
+        worker_task = asyncio.create_task(run_weather_preview())
     else:
         try:
             mac, key = _resolve_device_credentials(req, session)
@@ -243,14 +245,19 @@ async def test_stream(req: StreamTestRequest, session: Session = Depends(get_ses
                 })
                 event_queue.put_nowait(None)
 
-        asyncio.create_task(run_ble_test())
+        worker_task = asyncio.create_task(run_ble_test())
 
     async def event_generator():
-        while True:
-            item = await event_queue.get()
-            if item is None:
-                break
-            yield f"data: {json.dumps(item)}\n\n"
+        try:
+            while True:
+                item = await event_queue.get()
+                if item is None:
+                    break
+                yield f"data: {json.dumps(item)}\n\n"
+        except asyncio.CancelledError:
+            if worker_task and not worker_task.done():
+                worker_task.cancel()
+            raise
 
     return StreamingResponse(
         event_generator(),

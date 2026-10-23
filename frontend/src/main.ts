@@ -9,6 +9,21 @@ const API_URL = (import.meta as any).env?.VITE_API_URL ||
     ? `${window.location.protocol}//${window.location.hostname}:8190` 
     : 'http://localhost:8190');
 
+// Chave opcional de autenticação da API (via .env ou localStorage)
+const API_KEY = (import.meta as any).env?.VITE_API_KEY || (typeof window !== 'undefined' ? localStorage.getItem('miband_api_key') || '' : '');
+if (API_KEY && typeof window !== 'undefined') {
+  const originalFetch = window.fetch;
+  window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    init = init || {};
+    const headers = new Headers(init.headers || {});
+    if (!headers.has('X-API-Key')) {
+      headers.set('X-API-Key', API_KEY);
+    }
+    init.headers = headers;
+    return originalFetch(input, init);
+  };
+}
+
 declare const Chart: any;
 
 let stepsChartInstance: any = null;
@@ -58,6 +73,17 @@ interface SyncLog {
   details: string;
 }
 
+function escapeHtml(str: any): string {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+let cachedDevicesList: DeviceConfig[] = [];
 let currentScheduleTimes: string[] = ['08:00', '12:00', '18:00', '22:00'];
 
 function renderScheduleBadges() {
@@ -115,10 +141,10 @@ async function performBleScan() {
             (d: any) => `
             <li class="device-item">
               <div class="device-item-info">
-                <strong>${d.name}</strong>
-                <span>MAC: <code>${d.address}</code> | Sinal: ${d.rssi} dBm</span>
+                <strong>${escapeHtml(d.name)}</strong>
+                <span>MAC: <code>${escapeHtml(d.address)}</code> | Sinal: ${Number(d.rssi)} dBm</span>
               </div>
-              <button class="btn btn-secondary btn-sm" onclick="window.selectBleDevice('${d.address}', '${d.name}')">Selecionar</button>
+              <button class="btn btn-secondary btn-sm" onclick="window.selectBleDeviceByMac('${encodeURIComponent(d.address)}', '${encodeURIComponent(d.name)}')">Selecionar</button>
             </li>
           `
           )
@@ -463,31 +489,33 @@ async function loadDevicesList() {
       badgesContainer.innerHTML = intervalBadge + timeBadges;
     }
 
+    cachedDevicesList = devices;
+
     tbody.innerHTML = devices
       .map(
         (dev) => `
         <tr>
-          <td><strong>${dev.device_name}</strong></td>
-          <td><code>${dev.mac_address}</code></td>
+          <td><strong>${escapeHtml(dev.device_name)}</strong></td>
+          <td><code>${escapeHtml(dev.mac_address)}</code></td>
           <td>
             <div style="font-size: 0.8rem;">
               <div><strong>Intervalo:</strong> a cada ${dev.sync_interval_hours || 1}h</div>
-              <div class="text-muted"><strong>Fixos:</strong> ${dev.sync_intervals || 'Nenhum'}</div>
+              <div class="text-muted"><strong>Fixos:</strong> ${escapeHtml(dev.sync_intervals || 'Nenhum')}</div>
             </div>
           </td>
           <td>
             ${
               dev.last_sync_time
-                ? `<span class="text-sm" title="${dev.last_sync_time}">${new Date(dev.last_sync_time).toLocaleString('pt-BR')}</span>`
+                ? `<span class="text-sm" title="${escapeHtml(dev.last_sync_time)}">${new Date(dev.last_sync_time).toLocaleString('pt-BR')}</span>`
                 : '<span class="text-muted text-sm">Nunca</span>'
             }
           </td>
           <td>${dev.auto_weather ? '<span class="status-tag success">Sim</span>' : '<span class="status-tag">Não</span>'}</td>
           <td>
             <div class="d-flex gap-2">
-              <button class="btn btn-secondary btn-sm" onclick="window.syncSingleDevice('${dev.mac_address}')" title="Sincronizar">🔄</button>
-              <button class="btn btn-secondary btn-sm" onclick='window.editDevice(${JSON.stringify(dev)})' title="Editar">✏️</button>
-              <button class="btn btn-danger btn-sm" onclick="window.deleteDevice('${dev.mac_address}')" title="Excluir">🗑️</button>
+              <button class="btn btn-secondary btn-sm" onclick="window.syncSingleDevice('${encodeURIComponent(dev.mac_address)}')" title="Sincronizar">🔄</button>
+              <button class="btn btn-secondary btn-sm" onclick="window.editDeviceByMac('${encodeURIComponent(dev.mac_address)}')" title="Editar">✏️</button>
+              <button class="btn btn-danger btn-sm" onclick="window.deleteDevice('${encodeURIComponent(dev.mac_address)}')" title="Excluir">🗑️</button>
             </div>
           </td>
         </tr>
@@ -576,8 +604,8 @@ function initCitySelector() {
               return `
                 <div class="city-dropdown-item" data-index="${idx}">
                   <div class="city-item-main">
-                    <span class="city-item-name">${item.name}</span>
-                    <span class="city-item-sub">${subText}</span>
+                    <span class="city-item-name">${escapeHtml(item.name)}</span>
+                    <span class="city-item-sub">${escapeHtml(subText)}</span>
                   </div>
                   <span class="city-item-coords">${Number(item.latitude).toFixed(2)}, ${Number(item.longitude).toFixed(2)}</span>
                 </div>
@@ -954,14 +982,14 @@ async function loadWeatherHistory() {
         (log) => `
         <tr>
           <td>${new Date(log.timestamp).toLocaleString('pt-BR')}</td>
-          <td><strong>📍 ${log.city}</strong></td>
+          <td><strong>📍 ${escapeHtml(log.city)}</strong></td>
           <td><span style="font-weight: 700; color: #f8fafc;">${log.temp}°C</span></td>
           <td><span class="text-muted text-sm">${log.temp_min !== null && log.temp_min !== undefined ? log.temp_min : '--'}° / ${log.temp_max !== null && log.temp_max !== undefined ? log.temp_max : '--'}°</span></td>
-          <td><span style="margin-right: 4px;">${getWeatherIcon(log.condition)}</span> ${log.condition}</td>
+          <td><span style="margin-right: 4px;">${getWeatherIcon(log.condition)}</span> ${escapeHtml(log.condition)}</td>
           <td>${log.humidity !== null && log.humidity !== undefined ? log.humidity + '%' : '--'}</td>
           <td>${log.wind_speed !== null && log.wind_speed !== undefined ? log.wind_speed + ' km/h' : '--'}</td>
-          <td><span class="badge">${log.provider}</span></td>
-          <td><span class="status-tag ${log.source.toLowerCase().includes('auto') ? 'scheduled' : 'manual'}">${log.source}</span></td>
+          <td><span class="badge">${escapeHtml(log.provider)}</span></td>
+          <td><span class="status-tag ${log.source.toLowerCase().includes('auto') ? 'scheduled' : 'manual'}">${escapeHtml(log.source)}</span></td>
         </tr>
       `
       )
@@ -991,10 +1019,10 @@ async function loadHistory() {
         (log) => `
         <tr>
           <td>${new Date(log.timestamp).toLocaleString('pt-BR')}</td>
-          <td><code>${log.device_mac || 'Principal'}</code></td>
-          <td><span class="status-tag ${log.status.toLowerCase()}">${log.status}</span></td>
-          <td>${log.message || '-'}</td>
-          <td><code>${log.details || '-'}</code></td>
+          <td><code>${escapeHtml(log.device_mac || 'Principal')}</code></td>
+          <td><span class="status-tag ${escapeHtml(log.status.toLowerCase())}">${escapeHtml(log.status)}</span></td>
+          <td>${escapeHtml(log.message || '-')}</td>
+          <td><code>${escapeHtml(log.details || '-')}</code></td>
         </tr>
       `
       )
@@ -1005,7 +1033,8 @@ async function loadHistory() {
 }
 
 // Funções Globais expostas para as ações dos botões
-(window as any).syncSingleDevice = async (mac: string) => {
+(window as any).syncSingleDevice = async (encodedMac: string) => {
+  const mac = decodeURIComponent(encodedMac);
   showNotification(`Sincronizando dispositivo ${mac}...`, 'success');
   try {
     const res = await fetch(`${API_URL}/api/sync`, {
@@ -1026,7 +1055,8 @@ async function loadHistory() {
   }
 };
 
-(window as any).deleteDevice = async (mac: string) => {
+(window as any).deleteDevice = async (encodedMac: string) => {
+  const mac = decodeURIComponent(encodedMac);
   if (!confirm(`Deseja realmente remover o dispositivo ${mac}?`)) return;
   try {
     const res = await fetch(`${API_URL}/api/devices/${mac}`, { method: 'DELETE' });
@@ -1068,12 +1098,28 @@ async function loadHistory() {
   if (title) title.textContent = `✏️ Editar Pulseira (${dev.device_name})`;
 };
 
+(window as any).editDeviceByMac = (encodedMac: string) => {
+  const mac = decodeURIComponent(encodedMac);
+  const dev = cachedDevicesList.find((d) => d.mac_address === mac);
+  if (dev) {
+    (window as any).editDevice(dev);
+  } else {
+    showNotification(`Dispositivo ${mac} não encontrado no cache local.`, 'error');
+  }
+};
+
 (window as any).selectBleDevice = (mac: string, name: string) => {
   const macInput = document.getElementById('cfg-mac') as HTMLInputElement;
   const nameInput = document.getElementById('cfg-name') as HTMLInputElement;
   if (macInput) macInput.value = mac;
   if (nameInput) nameInput.value = name;
   showNotification(`Dispositivo selecionado: ${name}`, 'success');
+};
+
+(window as any).selectBleDeviceByMac = (encodedMac: string, encodedName: string) => {
+  const mac = decodeURIComponent(encodedMac);
+  const name = decodeURIComponent(encodedName);
+  (window as any).selectBleDevice(mac, name);
 };
 
 // Configurar Eventos

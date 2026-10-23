@@ -142,8 +142,8 @@ class MiBandProtocol:
             return False
 
         try:
-            # 1. Gerar chaves ECDH B-163 locais
-            res = subprocess.check_output([node_bin, HELPER_PATH, "generate"], encoding="utf-8")
+            # 1. Gerar chaves ECDH B-163 locais de forma assíncrona para não travar o event loop
+            res = await asyncio.to_thread(subprocess.check_output, [node_bin, HELPER_PATH, "generate"], encoding="utf-8")
             key_data = json.loads(res.strip())
             priv_key = bytes.fromhex(key_data["privateKey"])
             pub_key = bytes.fromhex(key_data["publicKey"])
@@ -157,6 +157,41 @@ class MiBandProtocol:
         loop = asyncio.get_running_loop()
         auth_success_event = asyncio.Event()
         handle_counter = [0]
+
+        async def process_challenge_response(remote_random: bytes, remote_public: bytes):
+            try:
+                # Calcular segredo compartilhado B-163 via wasm helper em thread separada
+                res = await asyncio.to_thread(
+                    subprocess.check_output,
+                    [node_bin, HELPER_PATH, "secret", priv_key.hex(), remote_public.hex()],
+                    encoding="utf-8"
+                )
+                shared_secret = bytes.fromhex(json.loads(res.strip())["sharedSecret"])
+            except Exception as e:
+                self._trace("ERROR", f"Erro ao calcular segredo ECDH compartilhado: {e}")
+                return
+
+            # Derivar chave de sessão AES e sequência criptográfica inicial (InitOperation2021)
+            session_key = bytearray(16)
+            for i in range(16):
+                session_key[i] = shared_secret[i + 8] ^ self.auth_key[i]
+            self.session_key = bytes(session_key)
+            self.encrypted_seq = int.from_bytes(shared_secret[:4], byteorder="little")
+            self._trace("INFO", f"Sequência criptográfica inicial ECDH: {self.encrypted_seq}")
+
+            # Criptografar nonce com AES-CBC (IV nulo)
+            cipher1 = Cipher(algorithms.AES(self.auth_key), modes.CBC(bytes(16)))
+            enc1 = cipher1.encryptor()
+            out1 = enc1.update(remote_random) + enc1.finalize()
+
+            cipher2 = Cipher(algorithms.AES(bytes(session_key)), modes.CBC(bytes(16)))
+            enc2 = cipher2.encryptor()
+            out2 = enc2.update(remote_random) + enc2.finalize()
+
+            cmd = bytearray([0x05]) + out1 + out2
+            handle_counter[0] += 1
+            self._trace("INFO", "Enviando segunda etapa de autenticação criptografada...")
+            await self._write_chunked(UUID_CHAR_CHUNKED_WRITE, CHUNKED2021_ENDPOINT_AUTH, handle_counter[0], cmd)
 
         def on_chunked_notification(sender, data: bytearray):
             nonlocal expected_bytes, last_seq
@@ -195,46 +230,12 @@ class MiBandProtocol:
                 auth_success_event.set()
                 return
 
-            # Processar assim que todos os 64 bytes chegarem
+            # Processar assim que todos os 64 bytes chegarem de forma não bloqueante
             if expected_bytes > 0 and len(reassemble_buf) >= expected_bytes:
                 remote_random = bytes(reassemble_buf[:16])
                 remote_public = bytes(reassemble_buf[16:64])
-
-                try:
-                    # Calcular segredo compartilhado B-163 via wasm helper
-                    res = subprocess.check_output(
-                        [node_bin, HELPER_PATH, "secret", priv_key.hex(), remote_public.hex()],
-                        encoding="utf-8"
-                    )
-                    shared_secret = bytes.fromhex(json.loads(res.strip())["sharedSecret"])
-                except Exception as e:
-                    self._trace("ERROR", f"Erro ao calcular segredo ECDH compartilhado: {e}")
-                    return
-
-                # Derivar chave de sessão AES e sequência criptográfica inicial (InitOperation2021)
-                session_key = bytearray(16)
-                for i in range(16):
-                    session_key[i] = shared_secret[i + 8] ^ self.auth_key[i]
-                self.session_key = bytes(session_key)
-                self.encrypted_seq = int.from_bytes(shared_secret[:4], byteorder="little")
-                self._trace("INFO", f"Sequência criptográfica inicial ECDH: {self.encrypted_seq}")
-
-                # Criptografar nonce com AES-CBC (IV nulo)
-                cipher1 = Cipher(algorithms.AES(self.auth_key), modes.CBC(bytes(16)))
-                enc1 = cipher1.encryptor()
-                out1 = enc1.update(remote_random) + enc1.finalize()
-
-                cipher2 = Cipher(algorithms.AES(bytes(session_key)), modes.CBC(bytes(16)))
-                enc2 = cipher2.encryptor()
-                out2 = enc2.update(remote_random) + enc2.finalize()
-
-                cmd = bytearray([0x05]) + out1 + out2
-                handle_counter[0] += 1
-                self._trace("INFO", "Enviando segunda etapa de autenticação criptografada...")
-                asyncio.create_task(
-                    self._write_chunked(UUID_CHAR_CHUNKED_WRITE, CHUNKED2021_ENDPOINT_AUTH, handle_counter[0], cmd)
-                )
                 expected_bytes = 0
+                asyncio.create_task(process_challenge_response(remote_random, remote_public))
 
         try:
             await self.client.start_notify(UUID_CHAR_CHUNKED_READ, on_chunked_notification)

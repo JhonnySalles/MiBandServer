@@ -63,13 +63,39 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Middleware de log estruturado para todas as requisições HTTP
 app.add_middleware(RequestLoggingMiddleware)
+
+# Middleware opcional de autenticação por API Key (ativo apenas se API_KEY estiver no ambiente)
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
+from app.core.config import settings
+
+class OptionalApiKeyMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        api_key = settings.API_KEY
+        if api_key and request.url.path.startswith("/api/"):
+            if request.url.path in ("/api/status", "/api/docs", "/api/openapi.json", "/api/redoc") or request.method == "OPTIONS":
+                return await call_next(request)
+
+            client_key = request.headers.get("X-API-Key")
+            auth_header = request.headers.get("Authorization", "")
+            if auth_header.startswith("Bearer "):
+                client_key = client_key or auth_header[7:].strip()
+
+            if client_key != api_key:
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Chave de API não fornecida ou inválida (X-API-Key ou Bearer token requerido)."}
+                )
+        return await call_next(request)
+
+app.add_middleware(OptionalApiKeyMiddleware)
 
 app.include_router(router, prefix="/api")
 app.include_router(test_router, prefix="/api/test")
