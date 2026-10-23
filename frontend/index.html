@@ -91,6 +91,9 @@
               <div class="metric-data">
                 <span class="metric-label">Passos Hoje</span>
                 <span class="metric-value" id="val-steps">--</span>
+                <div class="battery-bar-container" id="steps-goal-container" style="display: none;">
+                  <div class="battery-bar" id="steps-goal-bar" style="width: 0%; background: linear-gradient(90deg, #6366f1, #818cf8);"></div>
+                </div>
                 <span class="metric-sub" id="val-distance">-- km percorridos</span>
               </div>
             </div>
@@ -109,7 +112,10 @@
               <div class="metric-data">
                 <span class="metric-label">Calorias Queimadas</span>
                 <span class="metric-value" id="val-calories">-- <small>kcal</small></span>
-                <span class="metric-sub">Gasto energético estimado</span>
+                <div class="battery-bar-container" id="calories-goal-container" style="display: none;">
+                  <div class="battery-bar" id="calories-goal-bar" style="width: 0%; background: linear-gradient(90deg, #f59e0b, #fbbf24);"></div>
+                </div>
+                <span class="metric-sub" id="val-calories-sub">Gasto energético estimado</span>
               </div>
             </div>
 
@@ -121,6 +127,33 @@
                 <div class="battery-bar-container">
                   <div class="battery-bar" id="battery-level-bar" style="width: 0%"></div>
                 </div>
+              </div>
+            </div>
+
+            <div class="metric-card">
+              <div class="metric-icon" style="background: rgba(14, 165, 233, 0.15); color: #0ea5e9;">🫁</div>
+              <div class="metric-data">
+                <span class="metric-label">Oxigênio no Sangue</span>
+                <span class="metric-value" id="val-spo2">--%</span>
+                <span class="metric-sub" id="val-spo2-status">SpO2 (Oximetria)</span>
+              </div>
+            </div>
+
+            <div class="metric-card">
+              <div class="metric-icon" style="background: rgba(168, 85, 247, 0.15); color: #a855f7;">🧘</div>
+              <div class="metric-data">
+                <span class="metric-label">Nível de Estresse</span>
+                <span class="metric-value" id="val-stress">-- <small>/ 100</small></span>
+                <span class="metric-sub" id="val-stress-status">Índice HRV</span>
+              </div>
+            </div>
+
+            <div class="metric-card">
+              <div class="metric-icon" style="background: rgba(249, 115, 22, 0.15); color: #f97316;">⚡</div>
+              <div class="metric-data">
+                <span class="metric-label">Pontuação PAI</span>
+                <span class="metric-value" id="val-pai">--</span>
+                <span class="metric-sub" id="val-pai-sub">Meta: manter &gt; 100</span>
               </div>
             </div>
           </div>
@@ -627,7 +660,10 @@
               </div>
               <div class="d-flex align-center gap-2">
                 <span id="progress-sync-alarms" class="test-progress-inline"></span>
-                <button id="btn-sync-alarms" class="btn btn-secondary btn-sm">
+                <button type="button" id="btn-read-alarms-card" class="btn btn-secondary btn-sm" title="Consultar e carregar alarmes direto da pulseira">
+                  <span>🔄</span> Ler da Pulseira
+                </button>
+                <button type="button" id="btn-sync-alarms" class="btn btn-primary btn-sm" title="Gravar e sincronizar lista de alarmes na pulseira">
                   <span>⚡</span> Sincronizar Alarmes
                 </button>
               </div>
@@ -897,6 +933,77 @@
                 </div>
               </div>
             </div>
+
+            <!-- Card 8: Metas de Atividade Física (Passos & Calorias) -->
+            <div class="card" id="card-fitness-goals">
+              <div class="card-header d-flex justify-between align-center flex-wrap gap-2">
+                <div class="d-flex align-center gap-2">
+                  <span class="fs-4">🎯</span>
+                  <h3 class="m-0">Metas Diárias de Atividade</h3>
+                </div>
+                <div class="d-flex align-center gap-2">
+                  <span id="progress-fitness-goals" class="test-progress-inline"></span>
+                  <button id="btn-apply-fitness-goals" class="btn btn-secondary btn-sm">
+                    <span>⚡</span> Aplicar
+                  </button>
+                </div>
+              </div>
+              <div class="card-body">
+                <p class="text-sm text-muted mb-3">
+                  Defina os objetivos diários de passos e queima de calorias. O progresso é sincronizado e exibido no mostrador e nas animações da pulseira.
+                </p>
+                <div class="band-form-row">
+                  <div class="form-group flex-1">
+                    <label for="input-step-goal" class="form-label-bold">Meta de Passos (passos/dia)</label>
+                    <input type="number" id="input-step-goal" class="form-control" value="8000" min="1000" max="60000" step="500">
+                    <small class="text-muted text-xs">Padrão recomendado: 8.000 a 10.000 passos.</small>
+                  </div>
+                  <div class="form-group flex-1">
+                    <label for="input-calorie-goal" class="form-label-bold">Meta de Calorias (kcal/dia)</label>
+                    <input type="number" id="input-calorie-goal" class="form-control" value="300" min="50" max="3000" step="50">
+                    <small class="text-muted text-xs">Padrão recomendado: 200 a 500 kcal.</small>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Card 9: Monitoramento Contínuo de Estresse (HRV) -->
+            <div class="card" id="card-stress-monitoring">
+              <div class="card-header d-flex justify-between align-center flex-wrap gap-2">
+                <div class="d-flex align-center gap-2">
+                  <span class="fs-4">🧘</span>
+                  <h3 class="m-0">Monitoramento Contínuo de Estresse</h3>
+                </div>
+                <div class="d-flex align-center gap-2">
+                  <span id="progress-stress-monitoring" class="test-progress-inline"></span>
+                  <button id="btn-apply-stress-monitoring" class="btn btn-secondary btn-sm">
+                    <span>⚡</span> Aplicar
+                  </button>
+                </div>
+              </div>
+              <div class="card-body">
+                <p class="text-sm text-muted mb-3">
+                  Calcula automaticamente seu nível de estresse (1-100) através da variabilidade da frequência cardíaca (HRV) ao longo do dia quando em repouso.
+                </p>
+                <div class="band-form-row">
+                  <div class="form-group flex-1">
+                    <label for="select-all-day-stress" class="form-label-bold">Monitoramento Automático</label>
+                    <select id="select-all-day-stress" class="form-select modern-select">
+                      <option value="true" selected>Ativado (Monitoramento Contínuo)</option>
+                      <option value="false">Desativado (Apenas manual na pulseira)</option>
+                    </select>
+                  </div>
+                  <div class="form-group flex-1">
+                    <label for="select-stress-interval" class="form-label-bold">Intervalo de Amostragem</label>
+                    <select id="select-stress-interval" class="form-select modern-select">
+                      <option value="5" selected>A cada 5 minutos (Alta precisão)</option>
+                      <option value="10">A cada 10 minutos (Equilibrado)</option>
+                      <option value="30">A cada 30 minutos (Economia de bateria)</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -1089,6 +1196,112 @@
               </div>
               <div class="test-card-footer">
                 <span class="text-muted text-xs" id="test-time-alarms">Aguardando consulta</span>
+              </div>
+            </div>
+
+            <!-- 7. Oxímetro (SpO2) -->
+            <div class="card test-card" id="card-test-spo2">
+              <div class="test-card-header">
+                <span class="test-card-icon">🫁</span>
+                <h4>Oxímetro (SpO2)</h4>
+                <div class="test-btn-group">
+                  <span id="progress-test-spo2" class="test-progress-inline"></span>
+                  <button class="btn btn-secondary btn-sm test-action-btn" id="btn-test-spo2">Medir</button>
+                </div>
+              </div>
+              <div class="test-card-body">
+                <div class="test-stat-row">
+                  <span class="test-label">Saturação:</span>
+                  <strong class="test-value text-info" id="test-val-spo2">--%</strong>
+                </div>
+                <div class="test-stat-row">
+                  <span class="test-label">Classificação:</span>
+                  <span class="badge" id="test-val-spo2-status">Aguardando medição</span>
+                </div>
+                <p class="text-xs text-muted mt-2">
+                  Aciona o sensor infravermelho de oximetria. Mantenha o braço imóvel por ~30s.
+                </p>
+              </div>
+              <div class="test-card-footer">
+                <span class="text-muted text-xs" id="test-time-spo2">Aguardando medição</span>
+              </div>
+            </div>
+
+            <!-- 8. Medição de Estresse (HRV) -->
+            <div class="card test-card" id="card-test-stress">
+              <div class="test-card-header">
+                <span class="test-card-icon">🧘</span>
+                <h4>Índice de Estresse</h4>
+                <div class="test-btn-group">
+                  <span id="progress-test-stress" class="test-progress-inline"></span>
+                  <button class="btn btn-secondary btn-sm test-action-btn" id="btn-test-stress">Medir</button>
+                </div>
+              </div>
+              <div class="test-card-body">
+                <div class="test-stat-row">
+                  <span class="test-label">Nível:</span>
+                  <strong class="test-value" id="test-val-stress" style="color: #a855f7;">-- <small>/ 100</small></strong>
+                </div>
+                <div class="test-stat-row">
+                  <span class="test-label">Estado:</span>
+                  <span class="badge" id="test-val-stress-badge">Aguardando cálculo</span>
+                </div>
+                <p class="text-xs text-muted mt-2">
+                  Calculado pela variabilidade de intervalos R-R (HRV) capturados pelo sensor PPG.
+                </p>
+              </div>
+              <div class="test-card-footer">
+                <span class="text-muted text-xs" id="test-time-stress">Aguardando medição</span>
+              </div>
+            </div>
+
+            <!-- 9. Metas de Atividade Física -->
+            <div class="card test-card" id="card-test-fitness-goals">
+              <div class="test-card-header">
+                <span class="test-card-icon">🎯</span>
+                <h4>Metas de Atividade</h4>
+                <div class="test-btn-group">
+                  <span id="progress-test-fitness-goals" class="test-progress-inline"></span>
+                  <button class="btn btn-secondary btn-sm test-action-btn" id="btn-test-fitness-goals">Enviar</button>
+                </div>
+              </div>
+              <div class="test-card-body">
+                <div class="form-group mb-2">
+                  <label class="text-xs text-muted">Passos Alvo</label>
+                  <input type="number" id="test-input-step-goal" class="form-control form-control-sm" value="8000" min="1000" max="60000" step="500">
+                </div>
+                <div class="form-group">
+                  <label class="text-xs text-muted">Calorias Alvo (kcal)</label>
+                  <input type="number" id="test-input-calorie-goal" class="form-control form-control-sm" value="300" min="50" max="3000" step="50">
+                </div>
+              </div>
+              <div class="test-card-footer">
+                <span class="text-muted text-xs" id="test-time-fitness-goals">Aguardando envio</span>
+              </div>
+            </div>
+
+            <!-- 10. Pontuação PAI -->
+            <div class="card test-card" id="card-test-pai">
+              <div class="test-card-header">
+                <span class="test-card-icon">⚡</span>
+                <h4>Pontuação PAI</h4>
+                <div class="test-btn-group">
+                  <span id="progress-test-pai" class="test-progress-inline"></span>
+                  <button class="btn btn-secondary btn-sm test-action-btn" id="btn-test-pai">Enviar</button>
+                </div>
+              </div>
+              <div class="test-card-body">
+                <div class="form-group mb-2">
+                  <label class="text-xs text-muted">PAI Total Acumulado (7 dias)</label>
+                  <input type="number" id="test-input-pai-total" class="form-control form-control-sm" value="100" min="0" max="999">
+                </div>
+                <div class="form-group">
+                  <label class="text-xs text-muted">PAI Conquistado Hoje</label>
+                  <input type="number" id="test-input-pai-today" class="form-control form-control-sm" value="15" min="0" max="100">
+                </div>
+              </div>
+              <div class="test-card-footer">
+                <span class="text-muted text-xs" id="test-time-pai">Aguardando envio</span>
               </div>
             </div>
           </div>

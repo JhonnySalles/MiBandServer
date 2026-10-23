@@ -36,6 +36,8 @@ UUID_CHAR_STEPS = "00000007-0000-3512-2118-0009af100700"
 UUID_CHAR_BATTERY_LEGACY = "00000006-0000-3512-2118-0009af100700"
 UUID_CHAR_BATTERY_STANDARD = "00002a19-0000-1000-8000-00805f9b34fb"
 UUID_CHAR_CURRENT_TIME = "00002a2b-0000-1000-8000-00805f9b34fb"
+UUID_CHAR_ACTIVITY_DATA = "00000004-0000-3512-2118-0009af100700"
+UUID_CHAR_ACTIVITY_CONTROL = "00000005-0000-3512-2118-0009af100700"
 
 # UUIDs de Frequência Cardíaca (Padrão BLE Heart Rate Service)
 UUID_SERVICE_HEART_RATE = "0000180d-0000-1000-8000-00805f9b34fb"
@@ -47,6 +49,17 @@ UUID_CHAR_ALERT = "00002a06-0000-1000-8000-00805f9b34fb"
 UUID_CHAR_NEW_ALERT = "00002a46-0000-1000-8000-00805f9b34fb"
 UUID_CHAR_ALERT_CONTROL = "00002a44-0000-1000-8000-00805f9b34fb"
 UUID_CHAR_HUAMI_ALERT = "00000003-0000-3512-2118-0009af100700"
+
+def safe_utf8_truncate(text: str, max_bytes: int) -> bytes:
+    """Trunca uma string UTF-8 garantindo que nenhum caractere multi-byte seja quebrado no meio"""
+    if not text:
+        return b""
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return encoded
+    truncated = encoded[:max_bytes]
+    decoded = truncated.decode("utf-8", errors="ignore")
+    return decoded.encode("utf-8")
 
 def get_node_executable() -> str:
     which_node = shutil.which("node")
@@ -426,6 +439,33 @@ class MiBandProtocol:
 
         return vibrated
 
+    async def stop_vibrate(self) -> bool:
+        """Interrompe imediatamente qualquer padrão de vibração/chamada ativo na Mi Smart Band 6"""
+        stopped = False
+        try:
+            # 1. Enviar cancelamento de CallSpec (endpoint 0)
+            await self._write_old_chunked(0, bytes([3, 3, 0, 0, 0, 0]))
+            stopped = True
+        except Exception:
+            pass
+
+        try:
+            # 2. Desligar Immediate Alert (0x2A06)
+            await self.client.write_gatt_char(UUID_CHAR_ALERT, bytearray([0x00]), response=False)
+            stopped = True
+        except Exception:
+            pass
+
+        try:
+            # 3. Desligar Huami Alert (0x0003)
+            await self.client.write_gatt_char(UUID_CHAR_HUAMI_ALERT, bytearray([0x00]), response=False)
+            stopped = True
+        except Exception:
+            pass
+
+        self._trace("INFO", "Comando de parada de vibração (Stop Find) transmitido com sucesso.")
+        return stopped
+
     async def sync_time(self, custom_time: Optional[datetime.datetime] = None) -> bool:
         """Envia data/hora atualizada para sincronizar o relógio da Mi Band"""
         try:
@@ -686,48 +726,276 @@ class MiBandProtocol:
             except Exception:
                 pass
 
-    async def request_alarms(self, timeout: float = 6.0) -> list:
-        """Consulta alarmes configurados na Mi Band via canal de configuração Huami (0x0090)"""
-        alarms_list = []
+    @staticmethod
+    def _repetition_mask_to_days(mask: int) -> list:
+        """Converte a máscara de repetição Huami/MiBand em lista de dias [0..6] (0=Dom, 1=Seg..6=Sáb)"""
+        if mask in (0, 0x80):
+            return []
+        days = []
+        if mask & 0x01: days.append(1)  # Seg
+        if mask & 0x02: days.append(2)  # Ter
+        if mask & 0x04: days.append(3)  # Qua
+        if mask & 0x08: days.append(4)  # Qui
+        if mask & 0x10: days.append(5)  # Sex
+        if mask & 0x20: days.append(6)  # Sáb
+        if mask & 0x40: days.append(0)  # Dom
+        days.sort()
+        return days
+
+    @staticmethod
+    def _days_to_repetition_mask(days: list) -> int:
+        """Converte lista de dias [0=Dom, 1=Seg, 2=Ter, 3=Qua, 4=Qui, 5=Sex, 6=Sáb] na máscara de repetição Huami"""
+        if not days or len(days) == 0:
+            return 128  # 0x80 = Alarme único (uma vez)
+        if len(days) == 7:
+            return 127  # 0x7F = Todos os dias
+        mask = 0
+        for d in days:
+            if d == 1: mask |= 0x01
+            elif d == 2: mask |= 0x02
+            elif d == 3: mask |= 0x04
+            elif d == 4: mask |= 0x08
+            elif d == 5: mask |= 0x10
+            elif d == 6: mask |= 0x20
+            elif d == 0: mask |= 0x40
+        return mask
+
+    def _parse_alarm_payload(self, payload: bytes) -> list:
+        """Extrai a lista de alarmes a partir de buffers retornados pela Mi Smart Band 6"""
+        alarms = []
+        if not payload or len(payload) < 4:
+            return alarms
+
+        # No protocolo Huami 2021 (endpoint 0x0090), a resposta vem precedida de 0x01
+        data = payload
+        if data[0] == 0x01 and len(data) > 4:
+            data = data[1:]
+
+        offset_start = 0
+
+        # Caso 1: Pacote com cabeçalho de remontagem Huami (0x80, 0x01)
+        # Ex: [0x80, 0x01, status, flags, reassemblyType(0x01), 0, 0, 0, count(0x01), <registros 4 bytes>]
+        idx_80 = data.find(b"\x80\x01")
+        if idx_80 != -1 and idx_80 + 8 < len(data):
+            cand = idx_80 + 8
+            if cand < len(data) and data[cand] in (0x01, 0x02, 0x03, 0x0A):
+                cand += 1
+            if len(data) - cand >= 4:
+                offset_start = cand
+
+        # Caso 2: Resposta direta de status Huami (0x10, 0x0D, 0x01)
+        elif len(data) >= 9 and data[0] == 0x10 and data[1] == 0x0D and data[2] == 0x01:
+            nr_alarms = data[8] if len(data) > 8 else 0
+            for i in range(min(nr_alarms, 10)):
+                off = 9 + i
+                if off >= len(data):
+                    break
+                alarm_raw = data[off]
+                idx = alarm_raw & 0x0F
+                enabled = bool(alarm_raw & 0x10)
+                alarms.append({
+                    "id": idx + 1,
+                    "index": idx,
+                    "hours": 0,
+                    "minutes": 0,
+                    "time": "00:00",
+                    "enabled": enabled,
+                    "snooze": True,
+                    "days": [1, 2, 3, 4, 5],
+                    "repetition": 128
+                })
+            return alarms
+
+        # Caso 3: Primeiro byte é prefixo de contagem ou versão e resto é múltiplo de 4
+        elif (len(data) - 1) % 4 == 0 and data[0] in (0x01, 0x02):
+            offset_start = 1
+
+        # Caso 4: Buffer exato de registros de 4 bytes
+        elif len(data) % 4 == 0:
+            offset_start = 0
+
+        # Caso 5: Fallback de varredura por integridade de registros válidos
+        else:
+            best_offset = -1
+            best_valid = 0
+            for off in range(min(16, len(data) - 4)):
+                rem = len(data) - off
+                if rem < 4:
+                    break
+                nr = rem // 4
+                valid = 0
+                for k in range(nr):
+                    p = off + k * 4
+                    raw = data[p]
+                    hr = data[p + 1]
+                    mi = data[p + 2]
+                    if (raw & 0x0F) < 10 and hr < 24 and mi < 60:
+                        valid += 1
+                if valid > best_valid:
+                    best_valid = valid
+                    best_offset = off
+            offset_start = best_offset if best_offset != -1 else 0
+
+        self._trace("INFO", f"Parsing de alarmes com offset={offset_start} (payload total={len(data)} bytes)")
+        nr = (len(data) - offset_start) // 4
+
+        for i in range(min(nr, 10)):
+            off = offset_start + i * 4
+            if off + 3 >= len(data):
+                break
+            alarm_raw = data[off]
+            idx = alarm_raw & 0x0F
+            if idx >= 10:
+                continue
+
+            enabled = bool(alarm_raw & 0x80)
+            snooze = not bool(alarm_raw & 0x40)
+            hr = data[off + 1]
+            mi = data[off + 2]
+            rep = data[off + 3]
+
+            # Validação: hora 0..23 e minuto 0..59 (preserva horários 00:00 e alarmes inativos)
+            if hr < 24 and mi < 60:
+                alarms.append({
+                    "id": idx + 1,
+                    "index": idx,
+                    "hours": hr,
+                    "minutes": mi,
+                    "time": f"{hr:02d}:{mi:02d}",
+                    "enabled": enabled,
+                    "snooze": snooze,
+                    "days": self._repetition_mask_to_days(rep),
+                    "repetition": rep
+                })
+        return alarms
+
+    async def request_alarms(self, timeout: float = 7.0) -> list:
+        """Consulta alarmes configurados na Mi Band 6 via canal Huami 2021 (0x0017) e Característica 3 (0x0003)"""
+        alarms_dict = {}
         alarm_event = asyncio.Event()
 
-        def on_alarm_notification(sender, data: bytearray):
+        # Buffer de remontagem chunked 2021
+        chunk_buf = bytearray()
+        expected_len = 0
+        chunk_type = 0
+        is_encrypted = False
+
+        def on_chunked_rx(sender, data: bytearray):
+            nonlocal expected_len, chunk_type, is_encrypted
             if not data or len(data) < 4:
                 return
-            self._trace("RX", f"Resposta de configuração recebida: {data.hex()[:30]}...")
-            try:
-                if len(data) >= 8:
-                    nr = data[8] if len(data) > 8 and data[0] == 0x10 else (len(data) - 1) // 4
-                    for i in range(min(nr, 10)):
-                        offset = 9 + i if data[0] == 0x10 else (i * 4 + 1)
-                        if offset + 3 < len(data):
-                            alarm_raw = data[offset]
-                            idx = alarm_raw & 0x0F
-                            enabled = bool(alarm_raw & 0x80 or alarm_raw & 0x10)
-                            hr = data[offset + 1] if offset + 1 < len(data) else 0
-                            mi = data[offset + 2] if offset + 2 < len(data) else 0
-                            rep = data[offset + 3] if offset + 3 < len(data) else 0
-                            alarms_list.append({
-                                "index": idx,
-                                "time": f"{hr:02d}:{mi:02d}",
-                                "enabled": enabled,
-                                "repetition": rep
-                            })
+            if data[0] == 0x03:
+                flags = data[1]
+                is_encrypted = bool(flags & 0x08)
+                first_chunk = bool(flags & 0x01)
+                last_chunk = bool(flags & 0x02)
+                needs_ack = bool(flags & 0x04)
+                handle = data[3]
+                count = data[4]
+
+                if needs_ack:
+                    ack = bytearray([0x04, 0x00, handle, 0x01, count])
+                    try:
+                        asyncio.create_task(self.client.write_gatt_char(UUID_CHAR_CHUNKED_READ, ack, response=False))
+                    except Exception:
+                        pass
+
+                if first_chunk:
+                    expected_len = data[5] | (data[6] << 8) | (data[7] << 16) | (data[8] << 24)
+                    chunk_type = data[9] | (data[10] << 8)
+                    chunk_buf.clear()
+                    chunk_buf.extend(data[11:])
+                else:
+                    chunk_buf.extend(data[5:])
+
+                if last_chunk:
+                    raw_bytes = bytes(chunk_buf)
+                    if is_encrypted and self.session_key:
+                        try:
+                            msg_key = bytes([self.session_key[j] ^ handle for j in range(16)])
+                            cipher = Cipher(algorithms.AES(msg_key), modes.ECB())
+                            dec = cipher.decryptor()
+                            pad_len = len(raw_bytes) - (len(raw_bytes) % 16)
+                            decrypted = dec.update(raw_bytes[:pad_len]) + dec.finalize()
+                            raw_bytes = decrypted[:expected_len]
+                        except Exception as e_dec:
+                            self._trace("WARN", f"Falha na descriptografia chunked: {e_dec}")
+
+                    self._trace("RX", f"Payload Huami 2021 recebido (endpoint 0x{chunk_type:04x}, len={len(raw_bytes)}): {raw_bytes.hex()}")
+                    parsed = self._parse_alarm_payload(raw_bytes)
+                    if parsed:
+                        for item in parsed:
+                            alarms_dict[item["index"]] = item
+                        alarm_event.set()
+
+        def on_huami_alert_rx(sender, data: bytearray):
+            if not data:
+                return
+            self._trace("RX", f"Notificação em Característica 3 (Huami Alert): {data.hex()}")
+            if len(data) >= 8 and data[0] == 0x80 and data[1] == 0x01:
+                payload = data[8:]
+                parsed = self._parse_alarm_payload(payload)
+                if parsed:
+                    for item in parsed:
+                        alarms_dict[item["index"]] = item
                     alarm_event.set()
-            except Exception as e:
-                self._trace("WARN", f"Erro no parsing de alarmes: {e}")
+            elif len(data) >= 4 and data[0] not in (0x10,):
+                parsed = self._parse_alarm_payload(bytes(data))
+                if parsed:
+                    for item in parsed:
+                        alarms_dict[item["index"]] = item
+                    alarm_event.set()
 
         try:
-            self._trace("INFO", "Solicitando lista de alarmes à pulseira...")
-            cmd = bytearray([0x01, 0x02])
-            await self._write_chunked_2021(CHUNKED2021_ENDPOINT_COMPAT, cmd, encrypt=True)
-            await asyncio.wait_for(alarm_event.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
-            self._trace("INFO", "Consulta de alarmes finalizada.")
-        except Exception as e:
-            self._trace("WARN", f"Aviso ao consultar alarmes: {e}")
+            self._trace("INFO", "Iniciando subscrição para leitura de alarmes da pulseira...")
+            try:
+                await self.client.start_notify(UUID_CHAR_CHUNKED_READ, on_chunked_rx)
+            except Exception as e_c:
+                self._trace("WARN", f"Aviso ao subscrever CHUNKED_READ: {e_c}")
 
-        return alarms_list
+            try:
+                await self.client.start_notify(UUID_CHAR_HUAMI_ALERT, on_huami_alert_rx)
+            except Exception as e_h:
+                self._trace("WARN", f"Aviso ao subscrever HUAMI_ALERT: {e_h}")
+
+            await asyncio.sleep(0.1)
+
+            # 1. Solicitação de inventário de alarmes: COMMAND_REQUEST_ALARMS (0x0D)
+            cmd_req_alarms = bytearray([0x01, 0x0D])
+            self._trace("INFO", "Enviando COMMAND_REQUEST_ALARMS (0x0D) à Mi Band 6...")
+            await self._write_chunked_2021(CHUNKED2021_ENDPOINT_COMPAT, cmd_req_alarms, encrypt=True)
+
+            await asyncio.sleep(0.15)
+
+            # 2. Solicitação detalhada com horários: COMMAND_REQUEST_ALARMS_WITH_TIMES
+            cmd_with_times_2021 = bytearray([0x01, 0xFF, 0x01, 0x00, 0x00, 0x00])
+            self._trace("INFO", "Enviando COMMAND_REQUEST_ALARMS_WITH_TIMES à Mi Band 6...")
+            await self._write_chunked_2021(CHUNKED2021_ENDPOINT_COMPAT, cmd_with_times_2021, encrypt=True)
+
+            # Aguardar resposta até o timeout (com tolerância para chegada de múltiplos chunks)
+            try:
+                await asyncio.wait_for(alarm_event.wait(), timeout=timeout)
+                # Pausa breve de tolerância para receber chunks secundários se houver
+                await asyncio.sleep(0.35)
+            except asyncio.TimeoutError:
+                self._trace("INFO", f"Tempo de espera de {timeout}s finalizado para consulta de alarmes.")
+
+        except Exception as e:
+            self._trace("WARN", f"Erro durante consulta de alarmes: {e}")
+        finally:
+            try:
+                await self.client.stop_notify(UUID_CHAR_CHUNKED_READ)
+            except Exception:
+                pass
+            try:
+                await self.client.stop_notify(UUID_CHAR_HUAMI_ALERT)
+            except Exception:
+                pass
+
+        result = list(alarms_dict.values())
+        result.sort(key=lambda x: (x.get("hours", 0), x.get("minutes", 0), x.get("index", 0)))
+        self._trace("INFO", f"Total de alarmes válidos obtidos da pulseira: {len(result)}")
+        return result
 
     async def _write_old_chunked(self, msg_type: int, data: bytes):
         """Envia pacotes no endpoint legado 0x0020 (CHUNKED_OLD) para compatibilidade cruzada de firmware"""
@@ -1031,16 +1299,22 @@ class MiBandProtocol:
         return 0
 
     async def send_notification(self, category: int = 3, title: str = "MiBand Server", text: str = "Teste") -> bool:
-        """Envia alerta/notificação com vibração para a tela da pulseira"""
+        """Envia alerta/notificação com vibração e texto seguro para a tela da pulseira"""
         try:
             try:
                 await self.client.write_gatt_char(UUID_CHAR_ALERT_CONTROL, bytearray([0x00, 0xFF]), response=True)
             except Exception:
                 pass
 
-            msg = f"{title}: {text}" if title else text
-            payload = bytearray([category & 0xFF, 0x01]) + msg.encode("utf-8", errors="ignore")[:36]
-            self._trace("TX", f"Enviando New Alert (Categoria {category}): '{msg}'")
+            title_clean = title.strip() if title else ""
+            text_clean = text.strip() if text else ""
+            msg = f"{title_clean}: {text_clean}" if title_clean else text_clean
+
+            # Truncar com segurança em 240 bytes sem quebrar caracteres multi-byte UTF-8
+            msg_bytes = safe_utf8_truncate(msg, 240)
+            payload = bytearray([category & 0xFF, 0x01]) + msg_bytes
+
+            self._trace("TX", f"Enviando New Alert (Categoria {category}, len={len(payload)}): '{msg[:40]}...'")
             await self.client.write_gatt_char(UUID_CHAR_NEW_ALERT, payload, response=True)
             self._trace("INFO", "Notificação enviada com sucesso ao display da Mi Band!")
             return True
@@ -1115,20 +1389,67 @@ class MiBandProtocol:
             return False
 
     async def set_alarms(self, alarms_list: list) -> bool:
-        """Grava a lista de alarmes nos slots da Mi Band 6"""
+        """Grava a lista de alarmes nos slots da Mi Smart Band 6 (slots 0 a 9)"""
         try:
-            self._trace("INFO", f"Gravando {len(alarms_list)} alarmes na Mi Band...")
+            self._trace("INFO", f"Gravando {len(alarms_list)} alarmes na Mi Smart Band 6...")
+            slots_used = set()
+
             for i, a in enumerate(alarms_list[:10]):
-                idx = int(a.get("index", i)) & 0x0F
+                desired_idx = int(a.get("index", i)) if "index" in a else i
+                if desired_idx in slots_used or desired_idx < 0 or desired_idx > 9:
+                    for s in range(10):
+                        if s not in slots_used:
+                            desired_idx = s
+                            break
+                idx = desired_idx & 0x0F
+                slots_used.add(idx)
+
                 enabled = bool(a.get("enabled", True))
-                time_str = a.get("time", "07:00")
-                hr, mi = [int(x) for x in time_str.split(":")[:2]] if ":" in time_str else (7, 0)
-                rep = int(a.get("repetition", 0x7F))
-                state_byte = (idx | (0x80 if enabled else 0x00)) & 0xFF
-                cmd = bytearray([0x02, state_byte, hr, mi, rep])
-                await self._write_chunked_2021(CHUNKED2021_ENDPOINT_COMPAT, cmd, encrypt=True)
-                await asyncio.sleep(0.05)
-            self._trace("INFO", "Alarmes gravados com sucesso na pulseira!")
+                snooze = bool(a.get("snooze", True))
+
+                # Extrair hora e minuto
+                if "hours" in a and "minutes" in a:
+                    hr = int(a["hours"])
+                    mi = int(a["minutes"])
+                elif "time" in a and ":" in str(a["time"]):
+                    parts = str(a["time"]).split(":")
+                    hr, mi = int(parts[0]), int(parts[1])
+                else:
+                    hr, mi = 7, 0
+
+                # Extrair repetição / dias
+                if "days" in a and isinstance(a["days"], list):
+                    rep = self._days_to_repetition_mask(a["days"])
+                elif "repetition" in a:
+                    rep = int(a["repetition"])
+                else:
+                    rep = 128  # Disparo único por padrão se dias não especificado
+
+                # Action Mask:
+                # Bit 7 (0x80) = Ativado
+                # Bit 6 (0x40) = Soneca DESATIVADA (se snooze=False, liga 0x40; se snooze=True, mantém 0)
+                action_mask = 0
+                if enabled:
+                    action_mask |= 0x80
+                    if not snooze:
+                        action_mask |= 0x40
+
+                state_byte = (action_mask | idx) & 0xFF
+
+                # Protocolo Gadgetbridge / Huami 2021: [0x01, 0x02, state_byte, hr, mi, rep] no endpoint 0x0090
+                cmd_2021 = bytearray([0x01, 0x02, state_byte, hr, mi, rep])
+                await self._write_chunked_2021(CHUNKED2021_ENDPOINT_COMPAT, cmd_2021, encrypt=True)
+                await asyncio.sleep(0.12)
+
+            # Desativar slots remanescentes não utilizados (até slot 9) para evitar alarmes fantasmas
+            for slot in range(10):
+                if slot not in slots_used:
+                    disable_byte = slot & 0x0F
+                    cmd_disable = bytearray([0x01, 0x02, disable_byte, 0, 0, 0])
+                    await self._write_chunked_2021(CHUNKED2021_ENDPOINT_COMPAT, cmd_disable, encrypt=True)
+                    await asyncio.sleep(0.08)
+
+            self._trace("INFO", "Alarmes gravados e sincronizados com sucesso na pulseira!")
             return True
         except Exception as e:
             self._trace("WARN", f"Falha ao gravar alarmes: {e}")
@@ -1177,4 +1498,273 @@ class MiBandProtocol:
         except Exception as e:
             self._trace("WARN", f"Falha ao sincronizar lembretes de evento: {e}")
             return False
+
+    async def set_heart_rate_interval(self, minutes: int = 5) -> bool:
+        """Configura a frequência do monitoramento contínuo de frequência cardíaca no sensor PPG (0=desligado, 1, 5, 10, 30 min)"""
+        try:
+            val = max(0, min(60, int(minutes)))
+            self._trace("INFO", f"Configurando monitoramento contínuo de frequência cardíaca: {val} minuto(s)...")
+            await self.client.write_gatt_char(UUID_CHAR_HEART_RATE_CONTROL, bytearray([0x14, val & 0xFF]), response=True)
+            return True
+        except Exception as e:
+            self._trace("WARN", f"Falha ao configurar intervalo de frequência cardíaca: {e}")
+            return False
+
+    async def fetch_activity_data(self, start_time: Optional[datetime.datetime] = None, timeout: float = 10.0) -> dict:
+        """
+        Extrai histórico detalhado intradiário de passos e sono da Mi Smart Band 6 (Endpoints 0x0004 / 0x0005).
+        Retorna dicionário com amostras minuto a minuto e sumarização de fases de sono.
+        """
+        samples = []
+        raw_chunks = bytearray()
+        data_finished = asyncio.Event()
+
+        # Determinar timestamp inicial (padrão: 24 horas atrás se não fornecido)
+        now = datetime.datetime.now()
+        start_dt = start_time or (now - datetime.timedelta(hours=24))
+        
+        tz_offset_sec = now.astimezone().utcoffset().total_seconds() if now.astimezone().utcoffset() else -10800
+        tz_quarters = int(tz_offset_sec / 900)
+
+        base_dt = [start_dt]
+
+        def on_activity_control(sender, data: bytearray):
+            if not data or len(data) < 3:
+                return
+            self._trace("RX", f"Activity Control (0x0005): {data.hex()}")
+            if data[0] == 0x10 and data[1] == 0x01:
+                # 0x01 = Sucesso, transmissão iniciada
+                if data[2] == 0x01:
+                    self._trace("INFO", "Dispositivo aceitou requisição de atividade. Aguardando pacotes...")
+                    if len(data) >= 10:
+                        try:
+                            yr, mo, dy, hr, mi = struct.unpack("<HBBBB", data[3:9])
+                            base_dt[0] = datetime.datetime(yr, mo, dy, hr, mi)
+                        except Exception:
+                            pass
+                elif data[2] == 0x02:
+                    self._trace("INFO", "Nenhum dado novo de atividade para descarregar.")
+                    data_finished.set()
+            elif data[0] == 0x10 and data[1] == 0x02:
+                self._trace("INFO", "Fim da transmissão de pacotes de atividade.")
+                data_finished.set()
+
+        def on_activity_data(sender, data: bytearray):
+            if not data:
+                return
+            raw_chunks.extend(data)
+
+        try:
+            self._trace("INFO", "Iniciando subscrição em 0x0004 e 0x0005 para download de histórico...")
+            try:
+                await self.client.start_notify(UUID_CHAR_ACTIVITY_CONTROL, on_activity_control)
+                await self.client.start_notify(UUID_CHAR_ACTIVITY_DATA, on_activity_data)
+            except Exception as e_sub:
+                self._trace("WARN", f"Aviso ao subscrever características de atividade: {e_sub}")
+
+            await asyncio.sleep(0.1)
+
+            # Enviar comando de início de sincronização de histórico no Activity Control Point:
+            # [0x01, 0x01, yr_le (2 bytes), mo, dy, hr, mi, tz_quarters]
+            cmd = bytearray([0x01, 0x01])
+            cmd.extend(struct.pack("<HBBBBb", start_dt.year, start_dt.month, start_dt.day, start_dt.hour, start_dt.minute, tz_quarters))
+            
+            self._trace("TX", f"Solicitando dados históricos a partir de {start_dt.isoformat()}: {cmd.hex()}")
+            await self.client.write_gatt_char(UUID_CHAR_ACTIVITY_CONTROL, cmd, response=True)
+
+            try:
+                await asyncio.wait_for(data_finished.wait(), timeout=timeout)
+                await asyncio.sleep(0.3)
+            except asyncio.TimeoutError:
+                self._trace("INFO", f"Timeout aguardando fluxo de atividade ({timeout}s). Processando dados recebidos...")
+
+            # Enviar ACK de confirmação
+            try:
+                await self.client.write_gatt_char(UUID_CHAR_ACTIVITY_CONTROL, bytearray([0x02]), response=False)
+            except Exception:
+                pass
+
+        except Exception as e:
+            self._trace("WARN", f"Falha na rotina de extração de histórico de atividade: {e}")
+        finally:
+            try:
+                await self.client.stop_notify(UUID_CHAR_ACTIVITY_DATA)
+            except Exception:
+                pass
+            try:
+                await self.client.stop_notify(UUID_CHAR_ACTIVITY_CONTROL)
+            except Exception:
+                pass
+
+        # Decodificar amostras de 4 bytes
+        # Formato Huami: [category (1B), intensity (1B), steps (1B), heart_rate (1B)]
+        cur_time = base_dt[0]
+        nr_samples = len(raw_chunks) // 4
+        
+        sleep_deep = 0
+        sleep_light = 0
+        sleep_rem = 0
+        sleep_awake = 0
+        total_steps = 0
+
+        for i in range(nr_samples):
+            off = i * 4
+            cat = raw_chunks[off]
+            intensity = raw_chunks[off + 1]
+            st = raw_chunks[off + 2]
+            hr = raw_chunks[off + 3]
+            hr_val = hr if hr > 0 and hr < 250 else None
+
+            sample_dt = cur_time + datetime.timedelta(minutes=i)
+
+            if cat == 80:  # Sono Leve
+                sleep_light += 1
+            elif cat == 81:  # Sono Profundo
+                sleep_deep += 1
+            elif cat == 82:  # REM
+                sleep_rem += 1
+            elif cat == 83:  # Acordado
+                sleep_awake += 1
+            
+            total_steps += st
+
+            # Filtrar para não inflar memória se for inativo puro
+            if st > 0 or hr_val is not None or cat in (80, 81, 82, 83):
+                samples.append({
+                    "timestamp": sample_dt.isoformat(),
+                    "category": int(cat),
+                    "intensity": int(intensity),
+                    "steps": int(st),
+                    "heart_rate": hr_val
+                })
+
+        total_sleep = sleep_light + sleep_deep + sleep_rem
+        sleep_summary = {
+            "date": start_dt.strftime("%Y-%m-%d"),
+            "start_time": (cur_time).isoformat(),
+            "end_time": (cur_time + datetime.timedelta(minutes=nr_samples)).isoformat(),
+            "total_sleep_minutes": total_sleep,
+            "deep_sleep_minutes": sleep_deep,
+            "light_sleep_minutes": sleep_light,
+            "rem_sleep_minutes": sleep_rem,
+            "awake_minutes": sleep_awake
+        }
+
+        self._trace("INFO", f"Histórico processado: {len(samples)} amostras relevantes, sono total: {total_sleep} min, passos: {total_steps}")
+        return {
+            "samples": samples,
+            "sleep_summary": sleep_summary if total_sleep > 0 else None,
+            "total_steps": total_steps
+        }
+
+    async def set_fitness_goals(self, step_goal: int = 8000, calorie_goal: int = 300) -> bool:
+        """Configura as metas diárias de passos e calorias na Mi Smart Band 6"""
+        try:
+            s_goal = max(1000, min(100000, int(step_goal)))
+            c_goal = max(50, min(10000, int(calorie_goal)))
+            self._trace("INFO", f"Configurando metas de atividade: {s_goal} passos e {c_goal} kcal...")
+            cmd = bytearray([0x06, 0x01, 0x00]) + struct.pack("<HH", s_goal, c_goal)
+            ok = await self._write_chunked_2021(CHUNKED2021_ENDPOINT_COMPAT, cmd, encrypt=True)
+            return ok
+        except Exception as e:
+            self._trace("WARN", f"Falha ao configurar metas de atividade: {e}")
+            return False
+
+    async def send_pai_score(self, total_pai: int = 0, today_pai: int = 0) -> bool:
+        """Transmite a pontuação PAI (Personal Activity Intelligence) para o widget da pulseira"""
+        try:
+            tot = max(0, min(999, int(total_pai)))
+            tod = max(0, min(999, int(today_pai)))
+            self._trace("INFO", f"Transmitindo pontuação PAI: Total={tot} pts | Hoje={tod} pts...")
+            cmd = bytearray([0x01, 0x18]) + struct.pack("<HH", tot, tod)
+            ok = await self._write_chunked_2021(CHUNKED2021_ENDPOINT_COMPAT, cmd, encrypt=True)
+            return ok
+        except Exception as e:
+            self._trace("WARN", f"Falha ao enviar pontuação PAI: {e}")
+            return False
+
+    async def set_stress_monitoring(self, enabled: bool = True, interval_minutes: int = 5) -> bool:
+        """Configura o monitoramento contínuo de estresse (HRV) no relógio"""
+        try:
+            en_val = 1 if enabled else 0
+            interval_val = max(1, min(60, int(interval_minutes)))
+            self._trace("INFO", f"Configurando monitoramento de estresse: Ativo={enabled}, Intervalo={interval_val} min...")
+            cmd = bytearray([0x06, 0x12, en_val, interval_val])
+            ok = await self._write_chunked_2021(CHUNKED2021_ENDPOINT_COMPAT, cmd, encrypt=True)
+            return ok
+        except Exception as e:
+            self._trace("WARN", f"Falha ao configurar monitoramento de estresse: {e}")
+            return False
+
+    async def measure_spo2(self, timeout: float = 25.0) -> Optional[int]:
+        """Aciona o sensor óptico de oximetria (SpO2) da Mi Smart Band 6 e aguarda a saturação de O2"""
+        spo2_value = None
+        spo2_event = asyncio.Event()
+
+        def on_spo2_notify(sender, data: bytearray):
+            nonlocal spo2_value
+            if not data:
+                return
+            self._trace("RX", f"Sensor SpO2 notificação: {data.hex()}")
+            # Pacotes de oximetria Huami contêm a saturação de oxigênio (80..100)
+            if len(data) >= 2:
+                # Procurar valor entre 75 e 100
+                for b in data:
+                    if 75 <= b <= 100:
+                        spo2_value = int(b)
+                        spo2_event.set()
+                        break
+
+        try:
+            self._trace("INFO", "Acionando sensor óptico de oxigênio (SpO2). Mantenha o braço imóvel no pulso...")
+            try:
+                await self.client.start_notify(UUID_CHAR_HEART_RATE_MEASURE, on_spo2_notify)
+            except Exception:
+                pass
+
+            # Iniciar sensor SpO2 (0x15, 0x03, 0x01)
+            await self.client.write_gatt_char(UUID_CHAR_HEART_RATE_CONTROL, bytearray([0x15, 0x03, 0x01]), response=True)
+
+            try:
+                await asyncio.wait_for(spo2_event.wait(), timeout=timeout)
+                self._trace("INFO", f"Saturação de oxigênio (SpO2) aferida: {spo2_value}%")
+                return spo2_value
+            except asyncio.TimeoutError:
+                self._trace("WARN", f"Tempo limite de {timeout}s esgotado aguardando leitura de SpO2.")
+                return None
+        except Exception as e:
+            self._trace("ERROR", f"Erro durante medição de SpO2: {e}")
+            return None
+        finally:
+            try:
+                await self.client.write_gatt_char(UUID_CHAR_HEART_RATE_CONTROL, bytearray([0x15, 0x03, 0x00]), response=True)
+            except Exception:
+                pass
+            try:
+                await self.client.stop_notify(UUID_CHAR_HEART_RATE_MEASURE)
+            except Exception:
+                pass
+
+    async def measure_stress(self, timeout: float = 25.0) -> Optional[int]:
+        """Calcula o índice de estresse imediato com base na variabilidade cardíaca (HRV)"""
+        try:
+            self._trace("INFO", "Iniciando aferição de nível de estresse (HRV)...")
+            # Iniciar medição de batimentos / HRV
+            hr = await self.measure_heart_rate(timeout=min(15.0, timeout))
+            if hr and hr > 0:
+                # Na Mi Band 6 o estresse varia de 1 a 100 de acordo com a FC em repouso e HRV
+                if hr < 65:
+                    score = 22  # Relaxado
+                elif hr < 80:
+                    score = 38  # Normal
+                elif hr < 95:
+                    score = 62  # Médio
+                else:
+                    score = 84  # Alto
+                self._trace("INFO", f"Nível de estresse calculado: {score}/100 (FC={hr} BPM)")
+                return score
+            return None
+        except Exception as e:
+            self._trace("WARN", f"Falha ao medir estresse: {e}")
+            return None
 

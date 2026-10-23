@@ -327,4 +327,58 @@ class MiBandTestService:
             return res
         return await self._execute_with_client(mac_address, auth_key, _action, "Disparo de Vibração", event_queue)
 
+    async def test_measure_spo2(self, mac_address: str, auth_key: str, event_queue: Optional[asyncio.Queue] = None) -> Dict[str, Any]:
+        async def _action(p: MiBandProtocol, log_cb, emit_prog, emit_done):
+            emit_prog("spo2", "Acionando sensor óptico SpO2 (mantenha o braço imóvel por até 30s)...", 50)
+            log_cb("INFO", "Disparando medição de oximetria (SpO2)...")
+            spo2 = await p.measure_spo2(timeout=30.0)
+            res = {"spo2": spo2}
+            emit_done("spo2", f"Oximetria concluída: {spo2}%" if spo2 else "Medição de SpO2 finalizada sem leitura estável", 95, res)
+            return res
+        return await self._execute_with_client(mac_address, auth_key, _action, "Medição de Oxímetro (SpO2)", event_queue)
+
+    async def test_measure_stress(self, mac_address: str, auth_key: str, event_queue: Optional[asyncio.Queue] = None) -> Dict[str, Any]:
+        async def _action(p: MiBandProtocol, log_cb, emit_prog, emit_done):
+            emit_prog("stress", "Coletando intervalo R-R (HRV) para cálculo do índice de estresse...", 50)
+            log_cb("INFO", "Disparando medição de estresse...")
+            stress = await p.measure_stress(timeout=25.0)
+            res = {"stress": stress}
+            emit_done("stress", f"Estresse calculado: {stress}/100" if stress is not None else "Leitura concluída sem dados estáveis", 95, res)
+            return res
+        return await self._execute_with_client(mac_address, auth_key, _action, "Medição de Estresse", event_queue)
+
+    async def test_send_fitness_goals(
+        self, 
+        mac_address: str, 
+        auth_key: str, 
+        step_goal: int = 8000, 
+        calorie_goal: int = 300,
+        event_queue: Optional[asyncio.Queue] = None
+    ) -> Dict[str, Any]:
+        async def _action(p: MiBandProtocol, log_cb, emit_prog, emit_done):
+            emit_prog("goals", f"Configurando metas: {step_goal} passos, {calorie_goal} kcal...", 60)
+            log_cb("INFO", f"Enviando metas de atividade: passos={step_goal}, calorias={calorie_goal}...")
+            ok = await p.set_fitness_goals(step_goal=step_goal, calorie_goal=calorie_goal)
+            res = {"sent": ok, "step_goal": step_goal, "calorie_goal": calorie_goal}
+            emit_done("goals", "Metas de passos e calorias atualizadas na pulseira", 95, res)
+            return res
+        return await self._execute_with_client(mac_address, auth_key, _action, "Configuração de Metas de Atividade", event_queue)
+
+    async def test_send_pai(
+        self, 
+        mac_address: str, 
+        auth_key: str, 
+        total_pai: int = 100, 
+        today_pai: int = 15,
+        event_queue: Optional[asyncio.Queue] = None
+    ) -> Dict[str, Any]:
+        async def _action(p: MiBandProtocol, log_cb, emit_prog, emit_done):
+            emit_prog("pai", f"Transmitindo escore PAI (Total: {total_pai}, Hoje: {today_pai})...", 60)
+            log_cb("INFO", f"Enviando escore PAI: total={total_pai}, hoje={today_pai}...")
+            ok = await p.send_pai_score(total_pai=total_pai, today_pai=today_pai)
+            res = {"sent": ok, "total_pai": total_pai, "today_pai": today_pai}
+            emit_done("pai", "Pontuação PAI enviada com sucesso à Mi Band", 95, res)
+            return res
+        return await self._execute_with_client(mac_address, auth_key, _action, "Sincronização de PAI", event_queue)
+
 miband_test_service = MiBandTestService()

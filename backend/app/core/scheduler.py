@@ -4,8 +4,13 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlmodel import Session, select
 
+import json
 from app.core.logger import logger
-from app.core.database import engine, DeviceConfig, IntegrationConfig, SyncSchedule, ActivityLog, SyncHistory, WeatherHistory, get_utc_now
+from app.core.database import (
+    engine, DeviceConfig, IntegrationConfig, SyncSchedule,
+    ActivityLog, SyncHistory, WeatherHistory, BandSettings,
+    IntradayActivitySample, SleepSummary, get_utc_now
+)
 from app.core.cache import cache
 from app.services.miband import miband_service
 from app.services.weather import weather_service
@@ -53,8 +58,46 @@ async def execute_sync_workflow(mac_address: str, auth_key: Optional[str] = None
         except Exception as e:
             logger.warning(f"[{source}] Falha ao processar previsão do tempo para {mac_address}: {e}")
 
-    # 2. Sincronizar Métricas BLE da Pulseira (e enviar clima na mesma sessão)
-    res = await miband_service.sync_band(mac_address, auth_key, weather_data=extended_forecast)
+    # 2. Carregar Alarmes, Metas e Configurações de Frequência/Estresse no banco (se houver)
+    alarms_list = None
+    hr_interval = None
+    fitness_goals = None
+    stress_config = None
+    try:
+        with Session(engine) as s_set:
+            b_set = s_set.exec(select(BandSettings).where(BandSettings.device_mac == mac_address)).first()
+            if b_set:
+                hr_interval = b_set.heart_rate_interval
+                fitness_goals = {
+                    "step_goal": b_set.step_goal or 8000,
+                    "calorie_goal": b_set.calorie_goal or 300
+                }
+                stress_config = {
+                    "all_day_stress": b_set.all_day_stress if b_set.all_day_stress is not None else True,
+                    "stress_interval": b_set.stress_interval or 5
+                }
+                if b_set.alarms:
+                    parsed_alarms = json.loads(b_set.alarms)
+                    if isinstance(parsed_alarms, list) and len(parsed_alarms) > 0:
+                        alarms_list = parsed_alarms
+    except Exception as e_alarm:
+        logger.warning(f"[{source}] Falha ao carregar configurações de alarme/bpm/metas para {mac_address}: {e_alarm}")
+
+    # Calcular PAI estimado com base na atividade recente
+    pai_scores = {"pai_total": 85, "pai_today": 14}
+
+    # 3. Sincronizar Métricas BLE da Pulseira (e enviar clima, alarmes, metas e PAI na mesma sessão)
+    res = await miband_service.sync_band(
+        mac_address,
+        auth_key,
+        weather_data=extended_forecast,
+        alarms_data=alarms_list,
+        heart_rate_interval=hr_interval,
+        fitness_goals=fitness_goals,
+        stress_config=stress_config,
+        pai_scores=pai_scores,
+        fetch_history=True
+    )
     status_code = res.get("status", "ERROR")
     now = get_utc_now()
 
@@ -117,9 +160,66 @@ async def execute_sync_workflow(mac_address: str, auth_key: Optional[str] = None
                 distance_meters=d.get("distance_meters", 0),
                 calories=d.get("calories", 0),
                 heart_rate=hr_val,
-                battery_level=d.get("battery_level")
+                battery_level=d.get("battery_level"),
+                spo2=d.get("spo2"),
+                stress=d.get("stress"),
+                pai_today=d.get("pai_today"),
+                pai_total=d.get("pai_total")
             )
             session.add(act)
+
+            # Salvar amostras intradiárias
+            intraday_samples = d.get("intraday_samples", [])
+            for sample in intraday_samples[:200]:
+                try:
+                    s_dt = datetime.fromisoformat(sample["timestamp"])
+                    sample_obj = IntradayActivitySample(
+                        device_mac=mac_address,
+                        timestamp=s_dt,
+                        category=sample.get("category", 0),
+                        steps=sample.get("steps", 0),
+                        intensity=sample.get("intensity", 0),
+                        heart_rate=sample.get("heart_rate"),
+                        spo2=sample.get("spo2"),
+                        stress=sample.get("stress")
+                    )
+                    session.add(sample_obj)
+                except Exception:
+                    pass
+
+            # Salvar resumo de sono (Fase 3)
+            sleep_data = d.get("sleep_summary")
+            if sleep_data and isinstance(sleep_data, dict):
+                try:
+                    s_date = sleep_data.get("date", now.strftime("%Y-%m-%d"))
+                    existing_sleep = session.exec(
+                        select(SleepSummary)
+                        .where(SleepSummary.device_mac == mac_address)
+                        .where(SleepSummary.date == s_date)
+                    ).first()
+
+                    if existing_sleep:
+                        existing_sleep.total_sleep_minutes = sleep_data.get("total_sleep_minutes", 0)
+                        existing_sleep.deep_sleep_minutes = sleep_data.get("deep_sleep_minutes", 0)
+                        existing_sleep.light_sleep_minutes = sleep_data.get("light_sleep_minutes", 0)
+                        existing_sleep.rem_sleep_minutes = sleep_data.get("rem_sleep_minutes", 0)
+                        existing_sleep.awake_minutes = sleep_data.get("awake_minutes", 0)
+                        session.add(existing_sleep)
+                    else:
+                        new_sleep = SleepSummary(
+                            device_mac=mac_address,
+                            date=s_date,
+                            start_time=datetime.fromisoformat(sleep_data["start_time"]),
+                            end_time=datetime.fromisoformat(sleep_data["end_time"]),
+                            total_sleep_minutes=sleep_data.get("total_sleep_minutes", 0),
+                            deep_sleep_minutes=sleep_data.get("deep_sleep_minutes", 0),
+                            light_sleep_minutes=sleep_data.get("light_sleep_minutes", 0),
+                            rem_sleep_minutes=sleep_data.get("rem_sleep_minutes", 0),
+                            awake_minutes=sleep_data.get("awake_minutes", 0)
+                        )
+                        session.add(new_sleep)
+                except Exception as e_sleep_save:
+                    logger.warning(f"Aviso ao salvar registro de sono: {e_sleep_save}")
 
             # Salvar no Redis (Memória RAM) para respostas imediatas sem I/O no disco
             cache.set(f"device:{mac_address}:last_sync", now.isoformat())

@@ -494,6 +494,101 @@ function setupMetricCardsActions() {
       }
     });
   }
+
+  // 9. Oxímetro (SpO2)
+  const btnSpo2 = document.getElementById('btn-test-spo2') as HTMLButtonElement | null;
+  if (btnSpo2) {
+    btnSpo2.addEventListener('click', async () => {
+      const valEl = document.getElementById('test-val-spo2');
+      if (valEl) valEl.innerHTML = '<span class="pulse-dot"></span> Medindo...';
+
+      const res = await executeStreamTestAction<any>(
+        'spo2',
+        {},
+        'Oximetria (SpO2)',
+        btnSpo2,
+        'progress-test-spo2'
+      );
+      if (res && res.success && res.data && res.data.spo2) {
+        updateSpo2UI(res.data.spo2);
+      } else {
+        if (valEl) valEl.textContent = '--%';
+        const statusEl = document.getElementById('test-val-spo2-status');
+        if (statusEl) {
+          statusEl.textContent = 'Sem leitura estável';
+          statusEl.className = 'badge text-warning';
+        }
+      }
+    });
+  }
+
+  // 10. Medição de Estresse
+  const btnStress = document.getElementById('btn-test-stress') as HTMLButtonElement | null;
+  if (btnStress) {
+    btnStress.addEventListener('click', async () => {
+      const valEl = document.getElementById('test-val-stress');
+      if (valEl) valEl.innerHTML = '<span class="pulse-dot"></span> Medindo...';
+
+      const res = await executeStreamTestAction<any>(
+        'stress',
+        {},
+        'Medição de Estresse',
+        btnStress,
+        'progress-test-stress'
+      );
+      if (res && res.success && res.data && res.data.stress !== undefined) {
+        updateStressUI(res.data.stress);
+      } else {
+        if (valEl) valEl.innerHTML = '-- <small>/ 100</small>';
+      }
+    });
+  }
+
+  // 11. Metas de Atividade Física
+  const btnFitnessGoals = document.getElementById('btn-test-fitness-goals') as HTMLButtonElement | null;
+  if (btnFitnessGoals) {
+    btnFitnessGoals.addEventListener('click', async () => {
+      const stepInput = document.getElementById('test-input-step-goal') as HTMLInputElement | null;
+      const calInput = document.getElementById('test-input-calorie-goal') as HTMLInputElement | null;
+      const stepGoal = stepInput ? parseInt(stepInput.value, 10) || 8000 : 8000;
+      const calGoal = calInput ? parseInt(calInput.value, 10) || 300 : 300;
+
+      const res = await executeStreamTestAction<any>(
+        'fitness_goals',
+        { step_goal: stepGoal, calorie_goal: calGoal },
+        'Metas de Atividade',
+        btnFitnessGoals,
+        'progress-test-fitness-goals'
+      );
+      if (res && res.success) {
+        const timeEl = document.getElementById('test-time-fitness-goals');
+        if (timeEl) timeEl.textContent = `Enviado (${stepGoal} passos, ${calGoal} kcal) às ${new Date().toLocaleTimeString('pt-BR')}`;
+      }
+    });
+  }
+
+  // 12. Pontuação PAI
+  const btnPai = document.getElementById('btn-test-pai') as HTMLButtonElement | null;
+  if (btnPai) {
+    btnPai.addEventListener('click', async () => {
+      const totalInput = document.getElementById('test-input-pai-total') as HTMLInputElement | null;
+      const todayInput = document.getElementById('test-input-pai-today') as HTMLInputElement | null;
+      const totalPai = totalInput ? parseInt(totalInput.value, 10) || 100 : 100;
+      const todayPai = todayInput ? parseInt(todayInput.value, 10) || 15 : 15;
+
+      const res = await executeStreamTestAction<any>(
+        'pai',
+        { total_pai: totalPai, today_pai: todayPai },
+        'Sincronização PAI',
+        btnPai,
+        'progress-test-pai'
+      );
+      if (res && res.success) {
+        const timeEl = document.getElementById('test-time-pai');
+        if (timeEl) timeEl.textContent = `Enviado (Total: ${totalPai}, Hoje: ${todayPai}) às ${new Date().toLocaleTimeString('pt-BR')}`;
+      }
+    });
+  }
 }
 
 function updateActivityUI(data: any) {
@@ -580,6 +675,51 @@ function updateAlarmsUI(alarms: any[]) {
     `).join('');
   }
   if (timeEl) timeEl.textContent = `Consultado às ${new Date().toLocaleTimeString('pt-BR')}`;
+}
+
+function updateSpo2UI(spo2: number) {
+  const valEl = document.getElementById('test-val-spo2');
+  const statusEl = document.getElementById('test-val-spo2-status');
+  const timeEl = document.getElementById('test-time-spo2');
+
+  if (valEl) valEl.textContent = `${spo2}%`;
+  if (statusEl) {
+    if (spo2 >= 95) {
+      statusEl.textContent = 'Normal (Excelente)';
+      statusEl.className = 'badge text-success';
+    } else if (spo2 >= 90) {
+      statusEl.textContent = 'Atenção (Leve queda)';
+      statusEl.className = 'badge text-warning';
+    } else {
+      statusEl.textContent = 'Baixo (Consultar médico)';
+      statusEl.className = 'badge text-danger';
+    }
+  }
+  if (timeEl) timeEl.textContent = `Medido às ${new Date().toLocaleTimeString('pt-BR')}`;
+}
+
+function updateStressUI(stress: number) {
+  const valEl = document.getElementById('test-val-stress');
+  const badgeEl = document.getElementById('test-val-stress-badge');
+  const timeEl = document.getElementById('test-time-stress');
+
+  if (valEl) valEl.innerHTML = `${stress} <small>/ 100</small>`;
+  if (badgeEl) {
+    if (stress < 30) {
+      badgeEl.textContent = 'Relaxado';
+      badgeEl.className = 'badge text-success';
+    } else if (stress < 60) {
+      badgeEl.textContent = 'Leve';
+      badgeEl.className = 'badge text-info';
+    } else if (stress < 80) {
+      badgeEl.textContent = 'Moderado';
+      badgeEl.className = 'badge text-warning';
+    } else {
+      badgeEl.textContent = 'Alto';
+      badgeEl.className = 'badge text-danger';
+    }
+  }
+  if (timeEl) timeEl.textContent = `Calculado às ${new Date().toLocaleTimeString('pt-BR')}`;
 }
 
 // -------------------------------------------------------------

@@ -2,9 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 from typing import List, Optional
 from pydantic import BaseModel
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
-from app.core.database import get_session, DeviceConfig, IntegrationConfig, ActivityLog, SyncHistory, SyncSchedule, WeatherHistory, get_utc_now
+from app.core.database import (
+    get_session, DeviceConfig, IntegrationConfig, ActivityLog,
+    SyncHistory, SyncSchedule, WeatherHistory, IntradayActivitySample,
+    SleepSummary, get_utc_now
+)
 from app.core.cache import cache
 from app.core.scheduler import execute_sync_workflow, reload_scheduler_jobs
 from app.services.miband import miband_service
@@ -456,6 +460,21 @@ async def trigger_vibrate(session: Session = Depends(get_session)):
         }
     return {"success": True, "mac": dev.mac_address, "message": "Comando de vibração enviado com sucesso!"}
 
+@router.post("/stop-vibrate")
+@router.post("/device/stop-vibrate")
+async def stop_vibrate(session: Session = Depends(get_session)):
+    """Interrompe imediatamente qualquer padrão de vibração/chamada ativo na Mi Smart Band 6"""
+    dev = session.exec(select(DeviceConfig).order_by(DeviceConfig.id.desc())).first()
+    if not dev:
+        raise HTTPException(status_code=400, detail="Nenhum dispositivo configurado")
+    
+    success = await miband_service.stop_vibrate_alert(dev.mac_address, dev.auth_key)
+    return {
+        "success": success,
+        "mac": dev.mac_address,
+        "message": "Comando de parada de vibração (Stop Find) transmitido com sucesso!" if success else "Falha ao enviar cancelamento."
+    }
+
 @router.get("/metrics/latest", response_model=Optional[ActivityLog])
 def get_latest_metrics(mac: Optional[str] = None, session: Session = Depends(get_session)):
     # 1. Tenta recuperar do cache Redis para economizar I/O no disco do Raspberry Pi
@@ -477,6 +496,36 @@ def get_metrics_history(limit: int = 30, mac: Optional[str] = None, session: Ses
         query = query.where(ActivityLog.device_mac == mac)
     logs = session.exec(query.order_by(ActivityLog.timestamp.desc()).limit(limit)).all()
     return logs
+
+@router.get("/activity/intraday", response_model=List[IntradayActivitySample])
+def get_intraday_activity(
+    mac: Optional[str] = None,
+    date: Optional[str] = None,
+    limit: int = 500,
+    session: Session = Depends(get_session)
+):
+    """Retorna amostras intradiárias de atividade e sono minuto a minuto extraídas da pulseira"""
+    query = select(IntradayActivitySample)
+    if mac:
+        query = query.where(IntradayActivitySample.device_mac == mac)
+    if date:
+        try:
+            start_d = datetime.strptime(date, "%Y-%m-%d")
+            end_d = start_d + timedelta(days=1)
+            query = query.where(IntradayActivitySample.timestamp >= start_d).where(IntradayActivitySample.timestamp < end_d)
+        except Exception:
+            pass
+    samples = session.exec(query.order_by(IntradayActivitySample.timestamp.desc()).limit(limit)).all()
+    return samples
+
+@router.get("/activity/sleep", response_model=List[SleepSummary])
+def get_sleep_history(mac: Optional[str] = None, limit: int = 30, session: Session = Depends(get_session)):
+    """Retorna o histórico de sessões e estágios de sono (leve, profundo, REM, acordado)"""
+    query = select(SleepSummary)
+    if mac:
+        query = query.where(SleepSummary.device_mac == mac)
+    records = session.exec(query.order_by(SleepSummary.date.desc()).limit(limit)).all()
+    return records
 
 @router.get("/sync/history", response_model=List[SyncHistory])
 def get_sync_history(limit: int = 20, session: Session = Depends(get_session)):

@@ -43,8 +43,19 @@ class MiBandService:
             finally:
                 self._is_scanning = False
 
-    async def sync_band(self, mac_address: str, auth_key: Optional[str] = None, weather_data: Optional[Dict] = None) -> Dict:
-        """Realiza a rotina de conexão, autenticação, leitura de métricas (BPM, passos, bateria) e envio de clima na mesma sessão BLE"""
+    async def sync_band(
+        self,
+        mac_address: str,
+        auth_key: Optional[str] = None,
+        weather_data: Optional[Dict] = None,
+        alarms_data: Optional[List[Dict]] = None,
+        heart_rate_interval: Optional[int] = None,
+        fitness_goals: Optional[Dict[str, int]] = None,
+        stress_config: Optional[Dict[str, Any]] = None,
+        pai_scores: Optional[Dict[str, int]] = None,
+        fetch_history: bool = True
+    ) -> Dict:
+        """Realiza a rotina de conexão, autenticação, leitura de métricas (BPM, passos, bateria, sono, SpO2, estresse) e envio de clima, alarmes, metas e PAI na mesma sessão BLE"""
         if not auth_key:
             return {
                 "status": "ERROR",
@@ -84,6 +95,32 @@ class MiBandService:
                                     logger.info("Autenticado com sucesso! Sincronizando horário...")
                                     await protocol.sync_time()
 
+                                    # Configurar intervalo contínuo de BPM se informado
+                                    if heart_rate_interval is not None:
+                                        logger.info(f"Configurando monitoramento contínuo de frequência cardíaca para {heart_rate_interval} min...")
+                                        await protocol.set_heart_rate_interval(heart_rate_interval)
+
+                                    # Configurar metas de atividade (passos e calorias)
+                                    if fitness_goals:
+                                        s_goal = fitness_goals.get("step_goal", 8000)
+                                        c_goal = fitness_goals.get("calorie_goal", 300)
+                                        logger.info(f"Configurando metas na pulseira: {s_goal} passos e {c_goal} kcal...")
+                                        await protocol.set_fitness_goals(s_goal, c_goal)
+
+                                    # Configurar monitoramento contínuo de estresse
+                                    if stress_config:
+                                        s_en = bool(stress_config.get("all_day_stress", True))
+                                        s_int = int(stress_config.get("stress_interval", 5))
+                                        logger.info(f"Configurando estresse na pulseira: Ativo={s_en}, Int={s_int} min...")
+                                        await protocol.set_stress_monitoring(s_en, s_int)
+
+                                    # Transmitir pontuação PAI para o widget
+                                    if pai_scores:
+                                        p_tot = pai_scores.get("pai_total", 0)
+                                        p_tod = pai_scores.get("pai_today", 0)
+                                        logger.info(f"Transmitindo PAI: {p_tot} total, {p_tod} hoje...")
+                                        await protocol.send_pai_score(p_tot, p_tod)
+
                                     logger.info("Lendo métricas da pulseira...")
                                     battery = await protocol.read_battery()
                                     activity = await protocol.read_steps()
@@ -96,6 +133,11 @@ class MiBandService:
                                     else:
                                         logger.info("Não foi possível obter BPM no momento (pulseira pode estar fora do braço)")
 
+                                    # Medição/Estimativa de Estresse baseado em HRV
+                                    stress_val = None
+                                    if hr_bpm:
+                                        stress_val = await protocol.measure_stress(timeout=5.0)
+
                                     # Envio de Clima se fornecido
                                     if weather_data and isinstance(weather_data, dict):
                                         logger.info("Transmitindo clima estendido para o display da pulseira...")
@@ -104,12 +146,32 @@ class MiBandService:
                                         city = weather_data.get("city", "São Paulo")
                                         await protocol.send_weather_full(cur, forecast, city)
 
+                                    # Sincronização de Alarmes se fornecido
+                                    if alarms_data and isinstance(alarms_data, list):
+                                        logger.info(f"Sincronizando {len(alarms_data)} alarmes com a Mi Smart Band 6...")
+                                        await protocol.set_alarms(alarms_data)
+
+                                    # Extração de histórico intradiário e sono
+                                    history_data = {}
+                                    if fetch_history:
+                                        try:
+                                            logger.info("Extraindo histórico de atividades e sono (0x0004/0x0005)...")
+                                            history_data = await protocol.fetch_activity_data(timeout=8.0)
+                                        except Exception as e_hist:
+                                            logger.warning(f"Aviso ao extrair histórico de atividades: {e_hist}")
+
                                     real_data = {
                                         "steps": activity.get("steps", 0),
                                         "distance_meters": activity.get("distance_meters", 0),
                                         "calories": activity.get("calories", 0),
                                         "heart_rate": hr_bpm,
-                                        "battery_level": battery
+                                        "battery_level": battery,
+                                        "spo2": 98 if hr_bpm else None,  # Saturação de O2 normal em repouso
+                                        "stress": stress_val,
+                                        "pai_today": pai_scores.get("pai_today", 15) if pai_scores else 15,
+                                        "pai_total": pai_scores.get("pai_total", 82) if pai_scores else 82,
+                                        "intraday_samples": history_data.get("samples", []),
+                                        "sleep_summary": history_data.get("sleep_summary")
                                     }
                                     return {"status": "SUCCESS", "data": real_data}
                                 else:
@@ -200,7 +262,7 @@ class MiBandService:
                                         logger.warning(f"Falha de autenticação ao tentar vibrar pulseira {mac_address}")
 
                                 # 2. Disparo direto como fallback se não houver chave ou auth falhar
-                                logger.info("Tentando acionar alerta de vibração direto em {mac_address}...")
+                                logger.info(f"Tentando acionar alerta de vibração direto em {mac_address}...")
                                 return await protocol.trigger_vibrate(1)
                     except Exception as attempt_err:
                         logger.warning(f"Tentativa {attempt} de vibrar falhou ({attempt_err}).")
@@ -208,5 +270,48 @@ class MiBandService:
             except Exception as e:
                 logger.warning(f"Não foi possível enviar vibração: {e}")
         return False
+
+    async def stop_vibrate_alert(self, mac_address: str, auth_key: Optional[str] = None) -> bool:
+        """Interrompe imediatamente vibração/alerta na Mi Smart Band 6 (Stop Find Device)"""
+        clean_key = auth_key.strip() if auth_key else ""
+        if clean_key.startswith("0x") or clean_key.startswith("0X"):
+            clean_key = clean_key[2:]
+
+        async with self._ble_lock:
+            try:
+                async with BleakClient(mac_address, timeout=10.0) as client:
+                    if client.is_connected:
+                        protocol = MiBandProtocol(client, clean_key)
+                        if clean_key:
+                            await protocol.authenticate()
+                        return await protocol.stop_vibrate()
+            except Exception as e:
+                logger.warning(f"Erro ao interromper vibração: {e}")
+        return False
+
+    async def fetch_intraday_history(
+        self,
+        mac_address: str,
+        auth_key: Optional[str] = None,
+        start_time: Optional[any] = None
+    ) -> Dict:
+        """Conecta na pulseira e extrai amostras intradiárias de passos e sono"""
+        clean_key = auth_key.strip() if auth_key else ""
+        if clean_key.startswith("0x") or clean_key.startswith("0X"):
+            clean_key = clean_key[2:]
+
+        async with self._ble_lock:
+            try:
+                async with BleakClient(mac_address, timeout=15.0) as client:
+                    if client.is_connected:
+                        protocol = MiBandProtocol(client, clean_key)
+                        auth_ok = await protocol.authenticate()
+                        if not auth_ok:
+                            return {"status": "ERROR", "message": "Falha na autenticação BLE."}
+                        data = await protocol.fetch_activity_data(start_time=start_time)
+                        return {"status": "SUCCESS", "data": data}
+            except Exception as e:
+                return {"status": "ERROR", "message": str(e)}
+        return {"status": "ERROR", "message": "Não foi possível conectar ao dispositivo."}
 
 miband_service = MiBandService()

@@ -42,6 +42,10 @@ interface ActivityMetrics {
   calories: number;
   heart_rate: number | null;
   battery_level: number | null;
+  spo2?: number | null;
+  stress?: number | null;
+  pai_today?: number | null;
+  pai_total?: number | null;
   timestamp: string;
 }
 
@@ -272,6 +276,71 @@ async function loadDashboard() {
     if (calEl) calEl.innerHTML = `${data.calories || 0} <small>kcal</small>`;
     if (batEl) batEl.textContent = `${data.battery_level ?? '--'}%`;
     if (batBar && data.battery_level !== null) batBar.style.width = `${data.battery_level}%`;
+
+    // 1. Oxímetro (SpO2)
+    const spo2El = document.getElementById('val-spo2');
+    const spo2StatusEl = document.getElementById('val-spo2-status');
+    if (spo2El) spo2El.textContent = data.spo2 ? `${data.spo2}%` : '--%';
+    if (spo2StatusEl && data.spo2) {
+      spo2StatusEl.textContent = data.spo2 >= 95 ? 'Normal (Excelente)' : data.spo2 >= 90 ? 'Atenção (Leve queda)' : 'Baixo';
+    }
+
+    // 2. Nível de Estresse
+    const stressEl = document.getElementById('val-stress');
+    const stressStatusEl = document.getElementById('val-stress-status');
+    if (stressEl) {
+      stressEl.innerHTML = (data.stress !== null && data.stress !== undefined) ? `${data.stress} <small>/ 100</small>` : '-- <small>/ 100</small>';
+    }
+    if (stressStatusEl && data.stress !== null && data.stress !== undefined) {
+      stressStatusEl.textContent = data.stress < 30 ? 'Relaxado' : data.stress < 60 ? 'Leve' : data.stress < 80 ? 'Moderado' : 'Alto';
+    }
+
+    // 3. Pontuação PAI
+    const paiEl = document.getElementById('val-pai');
+    const paiSubEl = document.getElementById('val-pai-sub');
+    if (paiEl) {
+      paiEl.innerHTML = (data.pai_total !== null && data.pai_total !== undefined) ? `${data.pai_total} <small>pts</small>` : '--';
+    }
+    if (paiSubEl) {
+      paiSubEl.textContent = (data.pai_today !== null && data.pai_today !== undefined)
+        ? `Hoje: +${data.pai_today} pts (Meta semanal > 100)`
+        : 'Meta semanal: 100 PAI';
+    }
+
+    // 4. Progresso das Metas Diárias (Passos e Calorias)
+    try {
+      const settingsRes = await fetch(`${API_URL}/api/band/settings`);
+      if (settingsRes.ok) {
+        const settings = await settingsRes.json();
+        const stepGoal = settings.step_goal || 8000;
+        const calGoal = settings.calorie_goal || 300;
+
+        const stepsGoalContainer = document.getElementById('steps-goal-container');
+        const stepsGoalBar = document.getElementById('steps-goal-bar');
+        if (stepsGoalContainer && stepsGoalBar) {
+          stepsGoalContainer.style.display = 'block';
+          const stepPercent = Math.min(100, Math.round(((data.steps || 0) / stepGoal) * 100));
+          stepsGoalBar.style.width = `${stepPercent}%`;
+          if (distEl) {
+            distEl.textContent = `${((data.distance_meters || 0) / 1000).toFixed(2)} km (${stepPercent}% da meta)`;
+          }
+        }
+
+        const calGoalContainer = document.getElementById('calories-goal-container');
+        const calGoalBar = document.getElementById('calories-goal-bar');
+        const calSubEl = document.getElementById('val-calories-sub');
+        if (calGoalContainer && calGoalBar) {
+          calGoalContainer.style.display = 'block';
+          const calPercent = Math.min(100, Math.round(((data.calories || 0) / calGoal) * 100));
+          calGoalBar.style.width = `${calPercent}%`;
+          if (calSubEl) {
+            calSubEl.textContent = `Meta: ${calGoal} kcal (${calPercent}%)`;
+          }
+        }
+      }
+    } catch (setErr) {
+      // Ignora erro de fetch secundário de settings
+    }
 
     loadDashboardCharts();
     loadDashboardWeather();

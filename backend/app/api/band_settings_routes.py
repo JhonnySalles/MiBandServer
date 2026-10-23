@@ -27,10 +27,15 @@ class BandSettingsUpdate(BaseModel):
     dnd_mode: Optional[str] = None
     wear_location: Optional[str] = None
     language: Optional[str] = None
+    heart_rate_interval: Optional[int] = None
+    step_goal: Optional[int] = None
+    calorie_goal: Optional[int] = None
+    all_day_stress: Optional[bool] = None
+    stress_interval: Optional[int] = None
 
 class BandSettingsSyncRequest(BaseModel):
     device_mac: Optional[str] = None
-    scope: Optional[str] = "all"  # "all", "alarms", "world_clocks", "reminders", "wrist", "night", "language", "wear_location"
+    scope: Optional[str] = "all"  # "all", "alarms", "world_clocks", "reminders", "wrist", "night", "language", "wear_location", "heart_rate", "goals", "stress"
 
 def _get_or_create_settings(session: Session, mac_address: Optional[str] = None) -> BandSettings:
     query = select(DeviceConfig)
@@ -64,7 +69,12 @@ def _get_or_create_settings(session: Session, mac_address: Optional[str] = None)
             night_mode_end="07:00",
             dnd_mode="smart",
             wear_location="left",
-            language="pt_BR"
+            language="pt_BR",
+            heart_rate_interval=5,
+            step_goal=8000,
+            calorie_goal=300,
+            all_day_stress=True,
+            stress_interval=5
         )
         session.add(settings)
         session.commit()
@@ -127,6 +137,16 @@ def update_band_settings(payload: BandSettingsUpdate, session: Session = Depends
         settings.wear_location = payload.wear_location
     if payload.language is not None:
         settings.language = payload.language
+    if payload.heart_rate_interval is not None:
+        settings.heart_rate_interval = payload.heart_rate_interval
+    if payload.step_goal is not None:
+        settings.step_goal = payload.step_goal
+    if payload.calorie_goal is not None:
+        settings.calorie_goal = payload.calorie_goal
+    if payload.all_day_stress is not None:
+        settings.all_day_stress = payload.all_day_stress
+    if payload.stress_interval is not None:
+        settings.stress_interval = payload.stress_interval
 
     settings.updated_at = get_utc_now()
     session.add(settings)
@@ -191,6 +211,10 @@ async def sync_band_settings(req: BandSettingsSyncRequest, session: Session = De
                     ok = await protocol.set_band_language(settings.language)
                     results["language"] = ok
 
+                if scope in ("all", "heart_rate"):
+                    ok = await protocol.set_heart_rate_interval(settings.heart_rate_interval or 5)
+                    results["heart_rate_interval"] = ok
+
                 if scope in ("all", "alarms"):
                     alarms_list = json.loads(settings.alarms or "[]")
                     ok = await protocol.set_alarms(alarms_list)
@@ -205,6 +229,20 @@ async def sync_band_settings(req: BandSettingsSyncRequest, session: Session = De
                     reminders_list = json.loads(settings.event_reminders or "[]")
                     ok = await protocol.set_event_reminders(reminders_list)
                     results["event_reminders"] = ok
+
+                if scope in ("all", "goals"):
+                    ok = await protocol.set_fitness_goals(
+                        step_goal=settings.step_goal or 8000,
+                        calorie_goal=settings.calorie_goal or 300
+                    )
+                    results["fitness_goals"] = ok
+
+                if scope in ("all", "stress"):
+                    ok = await protocol.set_stress_monitoring(
+                        enabled=bool(settings.all_day_stress),
+                        interval_minutes=settings.stress_interval or 5
+                    )
+                    results["stress_monitoring"] = ok
 
                 return {
                     "success": True,
@@ -244,18 +282,17 @@ async def read_band_settings(req: BandSettingsSyncRequest, session: Session = De
                 if not auth_ok:
                     raise HTTPException(status_code=401, detail="Autenticação BLE rejeitada pela pulseira.")
 
-                # Ler alarmes
-                alarms = await protocol.request_alarms(timeout=6.0)
-                if alarms:
-                    settings.alarms = json.dumps(alarms, ensure_ascii=False)
-                    settings.updated_at = get_utc_now()
-                    session.add(settings)
-                    session.commit()
-                    session.refresh(settings)
+                # Ler alarmes da pulseira
+                alarms = await protocol.request_alarms(timeout=7.0)
+                settings.alarms = json.dumps(alarms, ensure_ascii=False)
+                settings.updated_at = get_utc_now()
+                session.add(settings)
+                session.commit()
+                session.refresh(settings)
 
                 return {
                     "success": True,
-                    "message": f"Leitura concluída! {len(alarms)} alarmes lidos da pulseira.",
+                    "message": f"Leitura concluída! {len(alarms)} alarmes identificados na pulseira.",
                     "alarms": alarms,
                     "settings": get_band_settings(settings.device_mac, session)
                 }

@@ -39,6 +39,10 @@ export interface BandSettingsData {
   dnd_mode: 'off' | 'smart' | 'all_day' | 'scheduled';
   wear_location: 'left' | 'right';
   language: string;
+  step_goal?: number;
+  calorie_goal?: number;
+  all_day_stress?: boolean;
+  stress_interval?: number;
 }
 
 let settingsState: BandSettingsData = {
@@ -55,7 +59,11 @@ let settingsState: BandSettingsData = {
   night_mode_end: '07:00',
   dnd_mode: 'smart',
   wear_location: 'left',
-  language: 'pt_BR'
+  language: 'pt_BR',
+  step_goal: 8000,
+  calorie_goal: 300,
+  all_day_stress: true,
+  stress_interval: 5
 };
 
 let worldClockInterval: any = null;
@@ -72,6 +80,8 @@ export function initBandSettingsTab(apiUrl: string, showToast: (msg: string, typ
   setupNightModeSection();
   setupWearLocationSection();
   setupLanguageSection();
+  setupFitnessGoalsSection();
+  setupStressMonitoringSection();
 
   // Iniciar relógio mundial atualizando a cada segundo
   if (worldClockInterval) clearInterval(worldClockInterval);
@@ -340,6 +350,7 @@ function renderReminders() {
 function setupAlarmsSection() {
   const btnAdd = document.getElementById('btn-add-alarm');
   const btnSync = document.getElementById('btn-sync-alarms');
+  const btnReadCard = document.getElementById('btn-read-alarms-card');
   const inputTime = document.getElementById('input-alarm-time') as HTMLInputElement;
   const inputSnooze = document.getElementById('input-alarm-snooze') as HTMLInputElement;
   const dayPills = document.querySelectorAll('#alarm-days-group .day-pill');
@@ -348,6 +359,31 @@ function setupAlarmsSection() {
     pill.addEventListener('click', () => {
       pill.classList.toggle('active');
     });
+  });
+
+  // Botão direto no Card: Ler da Pulseira
+  btnReadCard?.addEventListener('click', async () => {
+    setProgress('progress-sync-alarms', 'running', 'Lendo da pulseira...');
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/band/settings/read`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scope: 'alarms' })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Falha ao ler dados da pulseira');
+
+      const count = data.alarms ? data.alarms.length : 0;
+      setProgress('progress-sync-alarms', 'success', `${count} alarmes lidos!`);
+      notifyFn(data.message || `${count} alarmes obtidos da pulseira!`, 'success');
+      if (data.settings) {
+        settingsState = data.settings;
+        renderAlarms();
+      }
+    } catch (err: any) {
+      setProgress('progress-sync-alarms', 'error', 'Erro');
+      notifyFn(err.message, 'error');
+    }
   });
 
   btnAdd?.addEventListener('click', () => {
@@ -413,14 +449,27 @@ function renderAlarms() {
   }
 
   if (list.length === 0) {
-    container.innerHTML = '<div class="band-empty-state">Nenhum alarme configurado. Adicione um acima ou clique em "Ler Alarmes da Pulseira".</div>';
+    container.innerHTML = '<div class="band-empty-state">Nenhum alarme configurado. Adicione um acima ou clique em "Ler da Pulseira".</div>';
     return;
   }
 
   container.innerHTML = '';
   list.forEach((alarm, idx) => {
     const pad = (n: number) => String(n).padStart(2, '0');
-    const timeStr = `${pad(alarm.hours)}:${pad(alarm.minutes)}`;
+    let hr = alarm.hours;
+    let mi = alarm.minutes;
+    if (hr === undefined || mi === undefined) {
+      if ((alarm as any).time && typeof (alarm as any).time === 'string' && (alarm as any).time.includes(':')) {
+        const parts = (alarm as any).time.split(':').map(Number);
+        hr = parts[0] || 0;
+        mi = parts[1] || 0;
+      } else {
+        hr = 0;
+        mi = 0;
+      }
+    }
+    const timeStr = `${pad(hr)}:${pad(mi)}`;
+    const days = Array.isArray(alarm.days) ? alarm.days : [];
 
     const item = document.createElement('div');
     item.className = 'alarm-item-card';
@@ -435,7 +484,7 @@ function renderAlarms() {
             <span>⏰ ${timeStr}</span>
             ${alarm.snooze ? '<span class="alarm-badge-snooze">Soneca</span>' : ''}
           </div>
-          <div class="alarm-item-days">${formatAlarmDays(alarm.days)}</div>
+          <div class="alarm-item-days">${formatAlarmDays(days)}</div>
         </div>
       </div>
       <button type="button" class="btn-icon-delete" title="Excluir alarme">✕</button>
@@ -630,6 +679,28 @@ function setupLanguageSection() {
 }
 
 // -------------------------------------------------------------
+// 8. Metas de Atividade Física (Passos & Calorias)
+// -------------------------------------------------------------
+function setupFitnessGoalsSection() {
+  const btnApply = document.getElementById('btn-apply-fitness-goals');
+
+  btnApply?.addEventListener('click', () => {
+    saveAndSyncScope('goals', 'progress-fitness-goals', 'Metas diárias de atividade atualizadas na pulseira!');
+  });
+}
+
+// -------------------------------------------------------------
+// 9. Monitoramento Contínuo de Estresse (HRV)
+// -------------------------------------------------------------
+function setupStressMonitoringSection() {
+  const btnApply = document.getElementById('btn-apply-stress-monitoring');
+
+  btnApply?.addEventListener('click', () => {
+    saveAndSyncScope('stress', 'progress-stress-monitoring', 'Monitoramento de estresse sincronizado!');
+  });
+}
+
+// -------------------------------------------------------------
 // Atualizar Controles da UI a partir do State
 // -------------------------------------------------------------
 function updateSystemControlsFromState() {
@@ -686,11 +757,25 @@ function updateSystemControlsFromState() {
   const selectLang = document.getElementById('select-band-language') as HTMLSelectElement;
   if (selectLang) selectLang.value = settingsState.language || 'pt_BR';
 
+  // 8. Fitness Goals
+  const inputStepGoal = document.getElementById('input-step-goal') as HTMLInputElement;
+  const inputCalorieGoal = document.getElementById('input-calorie-goal') as HTMLInputElement;
+  if (inputStepGoal) inputStepGoal.value = String(settingsState.step_goal ?? 8000);
+  if (inputCalorieGoal) inputCalorieGoal.value = String(settingsState.calorie_goal ?? 300);
+
+  // 9. Stress Monitoring
+  const selectAllDayStress = document.getElementById('select-all-day-stress') as HTMLSelectElement;
+  const selectStressInterval = document.getElementById('select-stress-interval') as HTMLSelectElement;
+  if (selectAllDayStress) selectAllDayStress.value = String(settingsState.all_day_stress !== false);
+  if (selectStressInterval) selectStressInterval.value = String(settingsState.stress_interval ?? 5);
+
   // Sincronizar visual dos comboboxes customizados
   syncCustomSelect('select-lift-wrist-speed');
   syncCustomSelect('select-night-mode');
   syncCustomSelect('select-dnd-mode');
   syncCustomSelect('select-band-language');
+  syncCustomSelect('select-all-day-stress');
+  syncCustomSelect('select-stress-interval');
 }
 
 // -------------------------------------------------------------
@@ -726,6 +811,18 @@ function collectCurrentFormToState() {
   // Language
   const selectLang = document.getElementById('select-band-language') as HTMLSelectElement;
   if (selectLang) settingsState.language = selectLang.value;
+
+  // Fitness Goals
+  const inputStepGoal = document.getElementById('input-step-goal') as HTMLInputElement;
+  const inputCalorieGoal = document.getElementById('input-calorie-goal') as HTMLInputElement;
+  if (inputStepGoal && inputStepGoal.value) settingsState.step_goal = parseInt(inputStepGoal.value, 10) || 8000;
+  if (inputCalorieGoal && inputCalorieGoal.value) settingsState.calorie_goal = parseInt(inputCalorieGoal.value, 10) || 300;
+
+  // Stress Monitoring
+  const selectAllDayStress = document.getElementById('select-all-day-stress') as HTMLSelectElement;
+  const selectStressInterval = document.getElementById('select-stress-interval') as HTMLSelectElement;
+  if (selectAllDayStress) settingsState.all_day_stress = selectAllDayStress.value === 'true';
+  if (selectStressInterval && selectStressInterval.value) settingsState.stress_interval = parseInt(selectStressInterval.value, 10) || 5;
 }
 
 function escapeHtml(str: string): string {

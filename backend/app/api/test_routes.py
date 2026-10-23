@@ -31,7 +31,7 @@ class VibrateRequest(BaseTestRequest):
     text: Optional[str] = "Localizar MiBand"
 
 class StreamTestRequest(BaseModel):
-    action: str  # 'read_all', 'activity', 'battery', 'device_info', 'time_read', 'time_sync', 'alarms', 'heart_rate', 'weather_preview', 'weather_send', 'notify', 'vibrate'
+    action: str  # 'read_all', 'activity', 'battery', 'device_info', 'time_read', 'time_sync', 'alarms', 'heart_rate', 'spo2', 'stress', 'fitness_goals', 'pai', 'weather_preview', 'weather_send', 'notify', 'vibrate'
     mac_address: Optional[str] = None
     auth_key: Optional[str] = None
     city: Optional[str] = "São Paulo"
@@ -41,6 +41,10 @@ class StreamTestRequest(BaseModel):
     title: Optional[str] = "MiBand Server"
     text: Optional[str] = "Mensagem de Teste"
     count: Optional[int] = 2
+    step_goal: Optional[int] = 8000
+    calorie_goal: Optional[int] = 300
+    total_pai: Optional[int] = 100
+    today_pai: Optional[int] = 15
 
 def _resolve_device_credentials(req: BaseTestRequest, session: Session) -> tuple[str, str]:
     mac = req.mac_address
@@ -196,6 +200,26 @@ async def test_stream(req: StreamTestRequest, session: Session = Depends(get_ses
                         auth_key=key,
                         count=req.count or 2,
                         text=req.text or "Localizar MiBand",
+                        event_queue=event_queue
+                    )
+                elif req.action == "spo2":
+                    await miband_test_service.test_measure_spo2(mac, key, event_queue)
+                elif req.action == "stress":
+                    await miband_test_service.test_measure_stress(mac, key, event_queue)
+                elif req.action == "fitness_goals":
+                    await miband_test_service.test_send_fitness_goals(
+                        mac_address=mac,
+                        auth_key=key,
+                        step_goal=req.step_goal or 8000,
+                        calorie_goal=req.calorie_goal or 300,
+                        event_queue=event_queue
+                    )
+                elif req.action == "pai":
+                    await miband_test_service.test_send_pai(
+                        mac_address=mac,
+                        auth_key=key,
+                        total_pai=req.total_pai if req.total_pai is not None else 100,
+                        today_pai=req.today_pai if req.today_pai is not None else 15,
                         event_queue=event_queue
                     )
                 else:
