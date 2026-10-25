@@ -11,6 +11,17 @@ def get_db_url() -> str:
     db_path = os.path.join(backend_root, "data", "miband.db")
     return f"sqlite:///{db_path.replace(chr(92), '/')}"
 
+def get_log_dir() -> str:
+    backend_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    env_log = os.getenv("LOG_DIR")
+    if not env_log:
+        return os.path.join(backend_root, "logs")
+    if os.path.isabs(env_log):
+        return env_log
+    # Se caminho relativo (ex: "./logs" ou "logs"), ancora na raiz do backend
+    clean_relative = env_log.lstrip("./").lstrip(".\\")
+    return os.path.join(backend_root, clean_relative)
+
 class Settings(BaseModel):
     PORT: int = int(os.getenv("PORT", os.getenv("BACKEND_PORT", "8190")))
     HOST: str = os.getenv("HOST", "0.0.0.0")
@@ -22,7 +33,7 @@ class Settings(BaseModel):
     WEATHER_CITY: str = os.getenv("WEATHER_CITY", "São Paulo")
     WEATHER_LAT: float = float(os.getenv("WEATHER_LAT", "-23.5505"))
     WEATHER_LON: float = float(os.getenv("WEATHER_LON", "-46.6333"))
-    LOG_DIR: str = os.getenv("LOG_DIR", "./logs")
+    LOG_DIR: str = get_log_dir()
     LOG_RETENTION_DAYS: int = int(os.getenv("LOG_RETENTION_DAYS", "30"))
     LOG_FILENAME: str = os.getenv("LOG_FILENAME", "MiBandServer.log")
     API_KEY: Optional[str] = os.getenv("API_KEY", None)

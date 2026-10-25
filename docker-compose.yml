@@ -22,12 +22,14 @@ services:
       - redis
     volumes:
       - ./backend:/app
+      - ./backend/logs:/app/logs
       - backend_data:/app/data
       # Monta o DBus do host para comunicação BLE
       - /var/run/dbus:/var/run/dbus 
     environment:
       - PORT=${BACKEND_PORT:-8190}
       - REDIS_URL=redis://localhost:${REDIS_PORT:-6389}/0
+      - LOG_DIR=/app/logs
     env_file:
       - .env
 
